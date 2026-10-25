@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420mm" height="297mm" viewBox="0 0 420 297">
+ <rect width="420" height="297" fill="white"/><rect x="18" y="18" width="384" height="261" rx="6" fill="none" stroke="#172f42" stroke-width="1.5"/>
+ <g fill="#172f42"><circle cx="18" cy="18" r="5"/><circle cx="402" cy="18" r="5"/><circle cx="402" cy="279" r="5"/><circle cx="18" cy="279" r="5"/></g>
+ <text x="210" y="39" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#172f42">DEXPLAY SORT &amp; PLACE MAT</text>
+ <g font-family="Arial,sans-serif" font-size="10" font-weight="bold" text-anchor="middle">
+  <rect x="46" y="70" width="145" height="78" rx="8" fill="#fff0e8" stroke="#e85d4a" stroke-width="2"/><circle cx="119" cy="100" r="9" fill="#e85d4a"/><text x="119" y="132" fill="#172f42">RED</text>
+  <rect x="229" y="70" width="145" height="78" rx="8" fill="#eaf4ff" stroke="#3979d5" stroke-width="2"/><circle cx="301" cy="100" r="9" fill="#3979d5"/><text x="301" y="132" fill="#172f42">BLUE</text>
+  <rect x="46" y="165" width="145" height="78" rx="8" fill="#e9f8f0" stroke="#36a477" stroke-width="2"/><circle cx="119" cy="195" r="9" fill="#36a477"/><text x="119" y="227" fill="#172f42">GREEN</text>
+  <rect x="229" y="165" width="145" height="78" rx="8" fill="#fff8dc" stroke="#d7a900" stroke-width="2"/><circle cx="301" cy="195" r="9" fill="#d7a900"/><text x="301" y="227" fill="#172f42">YELLOW</text>
+ </g>
+ <text x="210" y="267" text-anchor="middle" font-family="Arial,sans-serif" font-size="6" fill="#172f42">Print at 100% on A3. Place the four corner dots inside the camera view. No cutting required.</text>
+</svg>
