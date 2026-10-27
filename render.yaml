@@ -38,7 +38,6 @@ services:
     dockerfilePath: ./api/Dockerfile
     dockerContext: ./api
     healthCheckPath: /health/ready
-    maxShutdownDelaySeconds: 60
     envVars:
       - key: APP_ENV
         value: production
