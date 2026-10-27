@@ -5,7 +5,7 @@ import { languages, detectLanguage, dictionary, t } from './i18n';
 import { GameSession } from './components/GameSession';
 import { CameraCoach } from './cv/CameraCoach';
 import { CameraBench } from './components/CameraBench';
-const API = '/api';
+const API = import.meta.env.VITE_API_URL || '/api';
 function makeProfile(group, name, age, condition, hand, language) {
     return { id: crypto.randomUUID(), group, name: name.trim(), age_years: age, age_group: age <= 6 ? '4-6' : age <= 9 ? '7-9' : '10-12', condition, hand, language, created_at: new Date().toISOString(), difficulty: { object_size_mm: 22, time_limit_s: 75, objects_count: 5, zone_size_mm: 80, speed_factor: 1 } };
 }

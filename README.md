@@ -28,3 +28,15 @@ Frames remain in browser memory and are never sent or stored. Only round/session
 The catalog starts empty by design. Populate only reviewed resources with verified availability, matching SHA-256 hashes, and documented licenses before enabling them; no invented content or sample URLs are seeded.
 
 The latest web build precaches 10,785 KiB uncompressed (about 3.64 MB gzip across app, OpenCV, and service worker). The compressed transfer fits a 5 MB budget; the installed offline cache does not. The production system must be deployed behind HTTPS, with DB backups, monitoring, key rotation, privacy notices, consent flows, retention policy, and jurisdiction-specific clinical/privacy review before real patient use.
+
+## API tooling
+
+Import [api/postman/DexPlay-Production.postman_collection.json](api/postman/DexPlay-Production.postman_collection.json) into Postman to explore the implemented API routes. The collection marks live PayPal subscription creation and account deletion as real side effects; the webhook route is for PayPal-signed deliveries only. Use synthetic, non-identifying practice data when exercising sync endpoints.
+
+## Render free-tier proof-of-concept deployment
+
+The root `render.yaml` defines a free Render Blueprint with the static PWA, FastAPI service, Render Postgres, and private-only Render Key Value. The PWA and API use the paired default Render hosts `dexplay-web.onrender.com` and `dexplay-api.onrender.com`; update `VITE_API_URL`, `PUBLIC_ORIGIN`, and `ALLOWED_ORIGINS` together if you rename either service or add a custom domain. The API's `DATABASE_URL` and `REDIS_URL` are linked to the Render-managed database and Key Value. The API normalizes Render's PostgreSQL URL to the asyncpg SQLAlchemy driver. The browser and service worker both use the configured API origin; local development continues to use Vite's `/api` proxy.
+
+To deploy, push this repository to a Git provider, create a Render Blueprint from the repository root, supply `OPENAI_API_KEY` when prompted, and deploy. Render generates the encryption key and API-key pepper. Back up `DATA_ENCRYPTION_KEY` securely and keep it stable: replacing it prevents decryption of existing saved cloud data. PayPal remains unavailable until live client credentials, a registered webhook ID, and active individual/clinic plan IDs are added to the API service. Leave Twilio credentials blank on this free blueprint because it has no background worker; deploy a paid Render worker before enabling SMS.
+
+This configuration is for a demo or proof of concept, **not production patient data**. Render's free API service sleeps after 15 minutes without traffic and can take about a minute to wake. Free Postgres is limited to 1 GB, has no backups, and expires after 30 days. Free Key Value is limited to 25 MB and loses data when restarted. Render does not offer a free background worker, so SMS task processing is disabled. Upgrade the API, database, Key Value, and add a worker with persistence/backups before using this deployment for a production service or real patient data.

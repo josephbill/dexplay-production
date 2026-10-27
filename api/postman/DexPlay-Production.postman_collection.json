@@ -1,0 +1,110 @@
+{
+  "info": {
+    "_postman_id": "9eb5b2b6-6cf6-41b4-b63c-9c4b58f229f3",
+    "name": "DexPlay Production API",
+    "description": "Import-ready collection for the current DexPlay FastAPI routes. Set baseUrl to the deployed API origin and deviceKey only after a paid subscription has been activated. Live payment creation can create real PayPal subscriptions. The PayPal webhook route accepts only PayPal-signed deliveries; do not use Postman to fake webhook events. API docs are disabled in production; this collection documents the implemented contract.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "deviceKey", "value": "", "type": "string" },
+    { "key": "deviceLabel", "value": "postman-device", "type": "string" },
+    { "key": "activationToken", "value": "", "type": "string" },
+    { "key": "patientId", "value": "", "type": "string" },
+    { "key": "paypalWebhookPayload", "value": "{}", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health/live", "description": "Process liveness. No credentials required." }
+        },
+        {
+          "name": "Readiness",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health/ready", "description": "Checks database connectivity. Returns 503 if the database is unavailable." }
+        }
+      ]
+    },
+    {
+      "name": "Device and cloud sync",
+      "item": [
+        {
+          "name": "Activate device key",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"api_key\": \"{{deviceKey}}\",\n  \"device_label\": \"{{deviceLabel}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/keys/activate",
+            "description": "Validates an existing paid device key. This route does not issue keys; keys are returned once by Claim subscription after PayPal activation."
+          }
+        },
+        {
+          "name": "Sync practice session and request cloud coaching",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-Key", "value": "{{deviceKey}}" }],
+            "body": { "mode": "raw", "raw": "{\n  \"session_data\": [\n    {\n      \"session_id\": \"postman-session-001\",\n      \"completed_at\": \"2026-10-26T10:00:00Z\",\n      \"accuracy\": 0.82,\n      \"duration_seconds\": 120\n    }\n  ],\n  \"profile\": {\n    \"condition\": \"example-condition\",\n    \"age_group\": \"adult\",\n    \"language\": \"en\",\n    \"current_difficulty\": 1\n  },\n  \"subscription_state\": \"active\",\n  \"usage_stats\": {},\n  \"resource_preferences\": {},\n  \"patient_id\": \"{{patientId}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/sync",
+            "description": "Requires an active subscription and X-Device-Key. Replace example session/profile data with consented, non-identifying test data. Camera frames are not accepted or uploaded; send session measurements only."
+          }
+        }
+      ]
+    },
+    {
+      "name": "PayPal subscriptions",
+      "item": [
+        {
+          "name": "Create live subscription (real payment flow)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"plan\": \"individual\",\n  \"language\": \"en\",\n  \"phone_number\": null,\n  \"sms_consent\": false\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/paypal/create_subscription",
+            "description": "LIVE SIDE EFFECT: creates a real PayPal subscription approval flow. Use only after setting live credentials and confirmed active plan IDs. Set plan to individual or clinic. If SMS consent is true, include an E.164 phone number and ensure Twilio is configured. The response script saves activation_token for the Claim request."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["if (pm.response.code === 200) {", "  const body = pm.response.json();", "  if (body.activation_token) pm.collectionVariables.set('activationToken', body.activation_token);", "  if (body.subscription_id) pm.collectionVariables.set('subscriptionId', body.subscription_id);", "}"] } }]
+        },
+        {
+          "name": "Claim activated subscription keys (one-time retrieval)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"activation_token\": \"{{activationToken}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/paypal/claim",
+            "description": "Call after PayPal sends a verified activation webhook. A 202 pending response means activation has not finished; retry later. On success, keys are returned once and must be stored securely. The response script stores the first key as deviceKey for subsequent requests."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["if (pm.response.code === 200) {", "  const body = pm.response.json();", "  const firstKey = body.keys && body.keys[0] && body.keys[0].api_key;", "  if (firstKey) pm.collectionVariables.set('deviceKey', firstKey);", "}"] } }]
+        },
+        {
+          "name": "PayPal webhook receiver (PayPal-signed requests only)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{{paypalWebhookPayload}}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/paypal/webhook",
+            "description": "Do not send a fabricated event from Postman. The API verifies PayPal signature headers against the configured live webhook ID. Register this deployed HTTPS endpoint in the PayPal live app; inspect real delivery attempts in PayPal's webhook dashboard."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clinic and privacy",
+      "item": [
+        {
+          "name": "Clinic dashboard",
+          "request": { "method": "GET", "header": [{ "key": "X-Device-Key", "value": "{{deviceKey}}" }], "url": "{{baseUrl}}/clinic/dashboard", "description": "Requires an active clinic device key. Returns session-derived patient groupings; use a clinic account only." }
+        },
+        {
+          "name": "Export account data",
+          "request": { "method": "GET", "header": [{ "key": "X-Device-Key", "value": "{{deviceKey}}" }], "url": "{{baseUrl}}/privacy/export", "description": "Returns the authenticated account's cloud session data. Handle the response as sensitive personal data." }
+        },
+        {
+          "name": "Delete account (irreversible data deletion)",
+          "request": { "method": "DELETE", "header": [{ "key": "X-Device-Key", "value": "{{deviceKey}}" }], "url": "{{baseUrl}}/privacy/account", "description": "IRREVERSIBLE: permanently deletes the authenticated account and associated records. Use only when the account owner has requested deletion." }
+        }
+      ]
+    }
+  ]
+}

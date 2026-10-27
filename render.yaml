@@ -1,0 +1,88 @@
+services:
+  # Static hosting avoids spending free web-service hours serving the PWA.
+  - type: web
+    name: dexplay-web
+    runtime: static
+    rootDir: web
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: dist
+    buildFilter:
+      paths:
+        - web/**
+        - render.yaml
+    envVars:
+      # Must match the API service name below. Update if you rename that service.
+      - key: VITE_API_URL
+        value: https://dexplay-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(self), microphone=()
+
+  # Free web services sleep after 15 minutes idle; the PWA still works offline.
+  - type: web
+    name: dexplay-api
+    runtime: docker
+    region: frankfurt
+    plan: free
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PUBLIC_ORIGIN
+        value: https://dexplay-web.onrender.com
+      - key: ALLOWED_ORIGINS
+        value: https://dexplay-web.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dexplay-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: dexplay-redis
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      # Keep this value stable and back it up; changing it makes saved encrypted data unreadable.
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true
+      - key: API_KEY_PEPPER
+        generateValue: true
+      - key: PAYPAL_MODE
+        value: live
+      # Optional PayPal/Twilio values are intentionally omitted until real credentials are configured.
+      # Twilio SMS also requires a paid Render background worker; do not enable it on this free blueprint.
+
+  # Free Key Value is volatile and used only as a demo queue/cache dependency here.
+  - type: keyvalue
+    name: dexplay-redis
+    region: frankfurt
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+    persistenceMode: off
+
+databases:
+  - name: dexplay-db
+    region: frankfurt
+    plan: free
+    databaseName: dexplay
+    user: dexplay
+    postgresMajorVersion: "16"
+    ipAllowList: []
