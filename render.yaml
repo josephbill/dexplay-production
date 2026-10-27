@@ -4,7 +4,7 @@ services:
     name: dexplay-web
     runtime: static
     rootDir: web
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
     staticPublishPath: dist
     buildFilter:
       paths:
