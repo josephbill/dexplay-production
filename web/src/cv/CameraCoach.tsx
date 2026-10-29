@@ -117,8 +117,8 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
     const [fps, setFps] = useState(0), [frame, setFrame] = useState({ objects: [], hand_present: false, ts: 0 }), [attempt, setAttempt] = useState(0);
     const activeRef = useRef(active);
     activeRef.current = active;
-    const width = clinic && window.innerWidth > 850 ? 640 : 320;
-    const height = clinic && window.innerWidth > 850 ? 480 : 240;
+    const width = clinic && window.innerWidth > 850 ? 320 : 240;
+    const height = clinic && window.innerWidth > 850 ? 240 : 180;
     useEffect(() => setCorners(calibration), [calibration]);
     const tapCorner = useCallback((event) => {
         if (!calibrationEnabled || !ready || corners.length >= 4)
@@ -161,7 +161,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
             try {
                 if (!navigator.mediaDevices?.getUserMedia)
                     throw new Error('camera-unavailable');
-                const videoConstraints = { ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }), width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 15, max: 15 } };
+                const videoConstraints = { ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }), width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 10, max: 10 } };
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
                 if (stopped) {
                     stream.getTracks().forEach(track => track.stop());
@@ -186,7 +186,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                     if (stopped || !activeRef.current)
                         return;
                     try {
-                        if (now - lastProcess >= 100 && video.readyState >= 2) {
+                        if (now - lastProcess >= 200 && video.readyState >= 2 && calibrationRef.current.length === 4) {
                             lastProcess = now;
                             ctx.drawImage(video, 0, 0, width, height);
                             const pixels = ctx.getImageData(0, 0, width, height), data = pixels.data;
@@ -232,7 +232,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                                 const contour = contours.get(i);
                                                 try {
                                                     const area = cv.contourArea(contour);
-                                                    if (area < 28 || area > width * height * .12)
+                                                    if (area < 12 || area > width * height * .12)
                                                         continue;
                                                     const bounds = cv.boundingRect(contour);
                                                     if (isPrintedBox(bounds, calibrationRef.current, width, height))
