@@ -121,14 +121,14 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
     const height = clinic && window.innerWidth > 850 ? 480 : 240;
     useEffect(() => setCorners(calibration), [calibration]);
     const tapCorner = useCallback((event) => {
-        if (!calibrationEnabled || !ready || !cvReady || corners.length >= 4)
+        if (!calibrationEnabled || !ready || corners.length >= 4)
             return;
         const rect = event.currentTarget.getBoundingClientRect();
         const point = [Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))];
         const next = [...corners, point];
         setCorners(next);
         onCorner(next);
-    }, [calibrationEnabled, corners, cvReady, onCorner, ready]);
+    }, [calibrationEnabled, corners, onCorner, ready]);
     const updateCorners = (next) => {
         setCorners(next);
         onCorner(next);
@@ -311,7 +311,9 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
             }
             catch (err) {
                 if (!stopped) {
-                    stopCamera();
+                    const hasLivePreview = Boolean(streamRef.current?.active);
+                    if (!hasLivePreview)
+                        stopCamera();
                     const name = err instanceof Error ? err.name : '';
                     const message = name === 'NotAllowedError' || name === 'SecurityError'
                         ? t(dict, 'camera_denied')
@@ -319,7 +321,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                             ? t(dict, 'camera_error')
                             : `${t(dict, 'camera_processing_error')} ${err instanceof Error ? err.message : ''}`.trim();
                     setError(message);
-                    setReady(false);
+                    setReady(hasLivePreview);
                     setCvReady(false);
                     statusCallbackRef.current?.('error');
                 }
@@ -348,9 +350,9 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
       {frame.objects.map((object, index) => <span key={`${object.color}-${index}`} className={`detected-object detected-${object.color}`} style={{ left: `${object.cx * 100}%`, top: `${object.cy * 100}%` }} aria-hidden="true"/>)}
       {corners.map((point, index) => <span key={index} className="calibration-dot" style={{ left: `${point[0] * 100}%`, top: `${point[1] * 100}%` }}>{index + 1}</span>)}
       {ready && cvReady && corners.length === 4 && <svg className="zone-grid" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">{zones.map(([color, polygon]) => <polygon key={color} className={`zone zone-${color}`} points={polygon.map(point => point.join(',')).join(' ')}/>)}</svg>}
-      {active && (!ready || !cvReady) && !error && <div className="camera-placeholder">{t(dict, 'cv_loading')}</div>}
+      {active && !ready && !error && <div className="camera-placeholder">{t(dict, 'cv_loading')}</div>}
     </div>
-    <div className="camera-status"><span>{error || (!active ? t(dict, 'camera_paused') : !cvReady ? t(dict, 'cv_loading') : corners.length < 4 ? `${t(dict, 'corner')} ${corners.length + 1}/4` : t(dict, 'calibrated'))}</span><span aria-label="frames per second">{fps} FPS</span></div>
+    <div className="camera-status"><span>{error || (!active ? t(dict, 'camera_paused') : !ready || !cvReady ? t(dict, 'cv_loading') : corners.length < 4 ? `${t(dict, 'corner')} ${corners.length + 1}/4` : t(dict, 'calibrated'))}</span><span aria-label="frames per second">{fps} FPS</span></div>
     {error && <button className="button secondary" onClick={retryCamera} disabled={!active}>{t(dict, 'camera_retry')}</button>}
     {calibrationEnabled && corners.length > 0 && <div className="camera-actions"><button className="button secondary" onClick={() => updateCorners(corners.slice(0, -1))}>{t(dict, 'undo_corner')}</button><button className="button secondary" onClick={() => updateCorners([])}>{t(dict, 'reset_calibration')}</button></div>}
     <p className="privacy-note">{t(dict, 'camera_privacy')}</p>
