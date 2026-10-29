@@ -1,6 +1,5 @@
 // @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { t } from '../i18n';
 
 /* ------------------------------------------------------------------ *
@@ -43,10 +42,9 @@ function zoneForPoint(point, corners) {
     return zonePolygons(corners).find(([, polygon]) => inside(point, polygon))?.[0] ?? null;
 }
 
-/* Dwell tuning. 700 ms is the therapeutic sweet spot — long enough that a
- * passing sweep doesn't score, short enough that a hesitant hold still does. */
 const DWELL_MS = 700;
 const DWELL_COOLDOWN_MS = 900;
+const INDEX_TIP = 8;
 
 const CORNER_LABELS = [
     'corner_top_left',
@@ -54,11 +52,6 @@ const CORNER_LABELS = [
     'corner_bottom_right',
     'corner_bottom_left',
 ];
-
-/* MediaPipe indices (see hand landmark chart). */
-const INDEX_TIP = 8;
-const WRIST = 0;
-const MIDDLE_MCP = 9;
 
 /* ------------------------------------------------------------------ *
  * Component
@@ -73,27 +66,27 @@ export function CameraCoach({
     onCorner,
     onCornerRelease,
     onFrame,
-    onCameraReady,
     onCameraStatus,
+    onCameraReady,
     calibrationEnabled = true,
 }) {
     const videoRef = useRef(null);
     const overlayRef = useRef(null);
     const streamRef = useRef(null);
-    const landmarkerRef = useRef(null);
+    const workerRef = useRef(null);
 
     const calibrationRef = useRef(calibration);
     calibrationRef.current = calibration;
     const callbackRef = useRef(onFrame);
     callbackRef.current = onFrame;
-    const readyCallbackRef = useRef(onCameraReady);
-    readyCallbackRef.current = onCameraReady;
     const statusCallbackRef = useRef(onCameraStatus);
     statusCallbackRef.current = onCameraStatus;
     const onCornerRef = useRef(onCorner);
     onCornerRef.current = onCorner;
     const onCornerReleaseRef = useRef(onCornerRelease);
     onCornerReleaseRef.current = onCornerRelease;
+    const readyCallbackRef = useRef(onCameraReady);
+    readyCallbackRef.current = onCameraReady;
 
     const [error, setError] = useState('');
     const [ready, setReady] = useState(false);
@@ -107,14 +100,7 @@ export function CameraCoach({
     activeRef.current = active;
 
     const lastTapTs = useRef(0);
-
-    /* Dwell state machine — one per hand, but we track just the primary. */
-    const dwellRef = useRef({
-        zone: null,
-        since: 0,
-        lastFiredZone: null,
-        lastFiredAt: 0,
-    });
+    const dwellRef = useRef({ zone: null, since: 0, lastFiredZone: null, lastFiredAt: 0 });
 
     const width = clinic && window.innerWidth > 850 ? 320 : 240;
     const height = clinic && window.innerWidth > 850 ? 240 : 180;
@@ -173,6 +159,92 @@ export function CameraCoach({
         dwellRef.current = { zone: null, since: 0, lastFiredZone: null, lastFiredAt: 0 };
     }, []);
 
+    /* ---------------------- Worker Result Handler ---------------------- */
+    
+    const processWorkerResults = (results, timestamp) => {
+        if (!activeRef.current) return;
+
+        const hands = results?.landmarks ?? [];
+        const primary = hands[0] ?? null;
+        const handPresent = Boolean(primary);
+        
+        const objects = [];
+        let activeZone = null;
+        const nowMs = Date.now();
+
+        if (primary && calibrationRef.current.length === 4) {
+            const tip = primary[INDEX_TIP];
+            const tipPoint = [tip.x, tip.y];
+            activeZone = zoneForPoint(tipPoint, calibrationRef.current);
+
+            if (activeZone) {
+                const dwell = dwellRef.current;
+
+                if (dwell.zone !== activeZone) {
+                    dwell.zone = activeZone;
+                    dwell.since = nowMs;
+                } else if (
+                    nowMs - dwell.since >= DWELL_MS &&
+                    (dwell.lastFiredZone !== activeZone ||
+                        nowMs - dwell.lastFiredAt >= DWELL_COOLDOWN_MS)
+                ) {
+                    objects.push({
+                        color: activeZone,
+                        cx: tip.x,
+                        cy: tip.y,
+                        zone_id: activeZone,
+                        dwell_ms: nowMs - dwell.since,
+                    });
+                    dwell.lastFiredZone = activeZone;
+                    dwell.lastFiredAt = nowMs;
+                    dwell.zone = null;
+                    dwell.since = 0;
+                }
+            } else {
+                dwellRef.current.zone = null;
+                dwellRef.current.since = 0;
+            }
+
+            // Draw overlay
+            const overlay = overlayRef.current;
+            const ctx = overlay?.getContext('2d');
+            if (ctx && overlay) {
+                ctx.clearRect(0, 0, width, height);
+                const px = tip.x * width;
+                const py = tip.y * height;
+                ctx.beginPath();
+                ctx.arc(px, py, 6, 0, Math.PI * 2);
+                ctx.fillStyle = activeZone ? '#22c55e' : '#f59e0b';
+                ctx.fill();
+
+                if (activeZone) {
+                    const elapsed = Date.now() - dwellRef.current.since;
+                    const pct = Math.min(1, elapsed / DWELL_MS);
+                    ctx.beginPath();
+                    ctx.arc(px, py, 18, -Math.PI / 2, -Math.PI / 2 + pct * Math.PI * 2);
+                    ctx.strokeStyle = '#22c55e';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            }
+        } else {
+            const ctx = overlayRef.current?.getContext('2d');
+            if (ctx && overlayRef.current) {
+                ctx.clearRect(0, 0, width, height);
+            }
+            dwellRef.current.zone = null;
+            dwellRef.current.since = 0;
+        }
+
+        const result = { objects, hand_present: handPresent, ts: nowMs };
+        
+        // Update UI
+        setFrame(result);
+        callbackRef.current(result);
+    };
+
+    /* --------------------------- Camera & Worker Effect --------------------------- */
+
     useEffect(() => {
         if (!active) {
             setReady(false);
@@ -184,23 +256,48 @@ export function CameraCoach({
         }
 
         let stopped = false;
-        let timer = 0;
         let fpsFrames = 0;
         let fpsStart = performance.now();
-        let hasProcessedFrame = false;
+        let frameId;
 
         statusCallbackRef.current?.('starting');
         setError('');
         setReady(false);
         setCvReady(false);
 
-        const start = async () => {
+        // 1. Initialize Worker
+        const worker = new Worker(new URL('./hand-worker.js', import.meta.url), { type: 'module' });
+        workerRef.current = worker;
+
+        worker.onmessage = (event) => {
+            const { type, results, timestamp, message } = event.data;
+            if (type === 'ready') {
+                setCvReady(true);
+                statusCallbackRef.current?.('ready');
+            } else if (type === 'result') {
+                processWorkerResults(results, timestamp);
+                
+                fpsFrames++;
+                if (performance.now() - fpsStart >= 1000) {
+                    setFps(Math.round((fpsFrames * 1000) / (performance.now() - fpsStart)));
+                    fpsFrames = 0;
+                    fpsStart = performance.now();
+                }
+            } else if (type === 'error') {
+                setError(`${t(dict, 'camera_processing_error')} ${message}`.trim());
+                statusCallbackRef.current?.('error');
+            }
+        };
+
+        worker.postMessage({ type: 'init' });
+
+        // 2. Start Camera
+        const startCamera = async () => {
             try {
                 if (!navigator.mediaDevices?.getUserMedia) {
                     throw new Error('camera-unavailable');
                 }
 
-                /* 1. Camera */
                 const videoConstraints = {
                     ...(deviceId
                         ? { deviceId: { exact: deviceId } }
@@ -213,172 +310,44 @@ export function CameraCoach({
                     audio: false,
                     video: videoConstraints,
                 });
+                
                 if (stopped) {
                     stream.getTracks().forEach((t) => t.stop());
                     return;
                 }
+                
                 streamRef.current = stream;
                 readyCallbackRef.current?.(stream.getVideoTracks()[0]?.getSettings() ?? {});
 
                 const video = videoRef.current;
-                const overlay = overlayRef.current;
                 video.srcObject = stream;
                 await video.play();
-                overlay.width = width;
-                overlay.height = height;
+                
+                if (overlayRef.current) {
+                    overlayRef.current.width = width;
+                    overlayRef.current.height = height;
+                }
                 setReady(true);
 
-                /* 2. MediaPipe HandLandmarker */
-                const vision = await FilesetResolver.forVisionTasks('/wasm');
-                if (stopped) return;
-                const landmarker = await HandLandmarker.createFromOptions(vision, {
-                    baseOptions: {
-                        modelAssetPath: '/models/hand_landmarker.task',
-                        delegate: 'GPU',
-                    },
-                    runningMode: 'VIDEO',
-                    numHands: 1,
-                    minHandDetectionConfidence: 0.6,
-                    minHandPresenceConfidence: 0.6,
-                    minTrackingConfidence: 0.6,
-                });
-                if (stopped) {
-                    landmarker.close();
-                    return;
-                }
-                landmarkerRef.current = landmarker;
-
-                /* 3. Frame loop — runs at whatever cadence the browser gives us.
-                 * No 200 ms throttle: MediaPipe inference is cheap enough on a 730
-                 * and we want responsive dwell timing. */
-                let lastUiUpdate = -Infinity;
-                let lastVideoTime = -1;
-
-                const process = (now) => {
-                    if (stopped || !activeRef.current) return;
-
-                    try {
-                        /* Skip re-inference if the video hasn't advanced */
-                        if (video.readyState < 2 || video.currentTime === lastVideoTime) {
-                            timer = window.setTimeout(() => process(performance.now()), 16);
-                            return;
-                        }
-                        lastVideoTime = video.currentTime;
-
-                        const results = landmarker.detectForVideo(video, now);
-                        const hands = results.landmarks ?? [];
-                        const primary = hands[0] ?? null;
-
-                        const handPresent = Boolean(primary);
-                        const objects = [];
-                        let activeZone = null;
-
-                        if (primary && calibrationRef.current.length === 4) {
-                            const tip = primary[INDEX_TIP];
-                            const tipPoint = [tip.x, tip.y];
-                            activeZone = zoneForPoint(tipPoint, calibrationRef.current);
-
-                            if (activeZone) {
-                                const dwell = dwellRef.current;
-                                const nowMs = Date.now();
-
-                                if (dwell.zone !== activeZone) {
-                                    dwell.zone = activeZone;
-                                    dwell.since = nowMs;
-                                } else if (
-                                    nowMs - dwell.since >= DWELL_MS &&
-                                    (dwell.lastFiredZone !== activeZone ||
-                                        nowMs - dwell.lastFiredAt >= DWELL_COOLDOWN_MS)
-                                ) {
-                                    /* Emit a dwell placement */
-                                    objects.push({
-                                        color: activeZone,
-                                        cx: tip.x,
-                                        cy: tip.y,
-                                        zone_id: activeZone,
-                                        dwell_ms: nowMs - dwell.since,
-                                    });
-                                    dwell.lastFiredZone = activeZone;
-                                    dwell.lastFiredAt = nowMs;
-                                    /* Re-arm: require the finger to leave and re-enter */
-                                    dwell.zone = null;
-                                    dwell.since = 0;
-                                }
-                            } else {
-                                dwellRef.current.zone = null;
-                                dwellRef.current.since = 0;
-                            }
-
-                            /* Draw fingertip + dwell ring on the overlay canvas */
-                            const ctx = overlay.getContext('2d');
-                            if (ctx) {
-                                ctx.clearRect(0, 0, width, height);
-                                const px = tip.x * width;
-                                const py = tip.y * height;
-                                ctx.beginPath();
-                                ctx.arc(px, py, 6, 0, Math.PI * 2);
-                                ctx.fillStyle = activeZone ? '#22c55e' : '#f59e0b';
-                                ctx.fill();
-
-                                if (activeZone) {
-                                    const elapsed = Date.now() - dwellRef.current.since;
-                                    const pct = Math.min(1, elapsed / DWELL_MS);
-                                    ctx.beginPath();
-                                    ctx.arc(px, py, 18, -Math.PI / 2, -Math.PI / 2 + pct * Math.PI * 2);
-                                    ctx.strokeStyle = '#22c55e';
-                                    ctx.lineWidth = 3;
-                                    ctx.stroke();
-                                }
-                            }
-                        } else {
-                            const ctx = overlay.getContext('2d');
-                            ctx?.clearRect(0, 0, width, height);
-                            dwellRef.current.zone = null;
-                            dwellRef.current.since = 0;
-                        }
-
-                        const result = { objects, hand_present: handPresent, ts: Date.now() };
-
-                        /* UI state throttled to 4 Hz; callback every frame */
-                        if (now - lastUiUpdate >= 250) {
-                            setFrame(result);
-                            lastUiUpdate = now;
-                        }
-                        callbackRef.current(result);
-
-                        if (!hasProcessedFrame) {
-                            hasProcessedFrame = true;
-                            setCvReady(true);
-                            statusCallbackRef.current?.('ready');
-                        }
-
-                        fpsFrames++;
-                        if (now - fpsStart >= 1000) {
-                            setFps(Math.round((fpsFrames * 1000) / (now - fpsStart)));
-                            fpsFrames = 0;
-                            fpsStart = now;
-                        }
-                    } catch (err) {
-                        if (!stopped) {
-                            stopped = true;
-                            window.clearTimeout(timer);
-                            stopCamera();
-                            setError(
-                                `${t(dict, 'camera_processing_error')} ${
-                                    err instanceof Error ? err.message : ''
-                                }`.trim()
+                // 3. Start Frame Loop
+                const loop = async () => {
+                    if (stopped) return;
+                    const v = videoRef.current;
+                    if (v && v.readyState >= 2) {
+                        try {
+                            const bitmap = await createImageBitmap(v);
+                            worker.postMessage(
+                                { type: 'detect', imageBitmap: bitmap, timestamp: performance.now() },
+                                [bitmap]
                             );
-                            setReady(false);
-                            setCvReady(false);
-                            statusCallbackRef.current?.('error');
+                        } catch (e) {
+                            // Ignore intermittent bitmap creation errors
                         }
-                        return;
                     }
-
-                    timer = window.setTimeout(() => process(performance.now()), 16);
+                    frameId = requestAnimationFrame(loop);
                 };
+                loop();
 
-                timer = window.setTimeout(() => process(performance.now()), 0);
             } catch (err) {
                 if (!stopped) {
                     const hasLivePreview = Boolean(streamRef.current?.active);
@@ -403,13 +372,13 @@ export function CameraCoach({
             }
         };
 
-        void start();
+        void startCamera();
 
         return () => {
             stopped = true;
-            window.clearTimeout(timer);
-            landmarkerRef.current?.close();
-            landmarkerRef.current = null;
+            cancelAnimationFrame(frameId);
+            worker.terminate();
+            workerRef.current = null;
             stopCamera();
             setReady(false);
             setCvReady(false);
