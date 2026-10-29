@@ -63,8 +63,6 @@ export function GameSession({
   const [error, setError] = useState('');
   const [cornerFeedback, setCornerFeedback] = useState(null); // { index, ts }
 
-  const prevRight = useRef(false);
-  const prevWrong = useRef(false);
   const roundStart = useRef(0);
   const rowsRef = useRef([]);
   const lastUiFrame = useRef(0);
@@ -91,6 +89,11 @@ export function GameSession({
     return t(dict, `corner_${CORNER_NAMES[idx]}`) || CORNER_NAMES[idx];
   }, [calibration.length, dict]);
 
+  /* ------------------------------------------------------------------ *
+   * Frame handler — MediaPipe emits one object per completed dwell.
+   * Each object in `next.objects` is a discrete placement, not a
+   * continuous detection, so no edge-detection refs are needed.
+   * ------------------------------------------------------------------ */
   const handleFrame = useCallback(
     (next) => {
       if (next.ts - lastUiFrame.current >= 250) {
@@ -98,16 +101,20 @@ export function GameSession({
         lastUiFrame.current = next.ts;
       }
       if (!started || paused) return;
-      const right = next.objects.some(
-        (object) => object.color === target && object.zone_id === target
+
+      const placements = next.objects.filter((object) => object.zone_id === target);
+      if (placements.length > 0) {
+        setPlaced((value) => Math.min(total, value + placements.length));
+        beep(660, 60);
+        haptic();
+      }
+
+      const offTarget = next.objects.filter(
+        (object) => object.zone_id && object.zone_id !== target
       );
-      const wrong = next.objects.some(
-        (object) => object.zone_id === target && object.color !== target
-      );
-      if (right && !prevRight.current) setPlaced((value) => Math.min(total, value + 1));
-      if (wrong && !prevWrong.current) setFumbles((value) => value + 1);
-      prevRight.current = right;
-      prevWrong.current = wrong;
+      if (offTarget.length > 0) {
+        setFumbles((value) => value + offTarget.length);
+      }
     },
     [started, paused, target, total]
   );
@@ -132,15 +139,14 @@ export function GameSession({
     [resumePending, started]
   );
 
-  // --- Corner handler: receives the full corners array from CameraCoach ---
+  /* ---------------------- corner calibration ---------------------- */
+
   const handleCorner = useCallback(
     (nextCorners, reason) => {
       if (!Array.isArray(nextCorners)) return;
 
-      // Forward to parent so calibration state stays in sync.
       onCalibration(nextCorners);
 
-      // Only celebrate ADDITIONS (a tap). Undo/reset reasons we ignore for feedback.
       if (reason !== 'tap') return;
       const newIndex = nextCorners.length - 1;
       if (newIndex < 0) return;
@@ -171,28 +177,27 @@ export function GameSession({
     [onCalibration, voice, dict, profile.language]
   );
 
-  // CameraCoach fires this when it undoes/resets — nothing extra needed here,
-  // but keeping the prop wired so the contract stays explicit.
   const handleCornerRelease = useCallback(() => {
-    /* no-op; debounce lives inside CameraCoach */
+    /* debounce lives inside CameraCoach */
   }, []);
 
-  // Clear the "just captured" highlight after ~1.2s.
   useEffect(() => {
     if (!cornerFeedback) return;
     const id = window.setTimeout(() => setCornerFeedback(null), 1200);
     return () => window.clearTimeout(id);
   }, [cornerFeedback]);
 
-  // Announce calibration complete once when it transitions to 4/4.
   useEffect(() => {
     if (calibration.length === 4 && lastCornerCount.current !== 4) {
-      if (voice) speak(t(dict, 'calibration_complete') || 'Calibration complete!', profile.language);
+      if (voice)
+        speak(t(dict, 'calibration_complete') || 'Calibration complete!', profile.language);
       beep(1200, 140);
       haptic();
     }
     lastCornerCount.current = calibration.length;
   }, [calibration.length, voice, dict, profile.language]);
+
+  /* ---------------------------- timer ---------------------------- */
 
   useEffect(() => {
     if (!started || paused || cameraStatus !== 'ready') return;
@@ -202,6 +207,8 @@ export function GameSession({
     );
     return () => window.clearInterval(id);
   }, [started, paused, cameraStatus]);
+
+  /* --------------------------- session --------------------------- */
 
   const session = useMemo(
     () => ({
@@ -237,8 +244,6 @@ export function GameSession({
       setPlaced(0);
       setFumbles(0);
       setSeconds(60);
-      prevRight.current = false;
-      prevWrong.current = false;
       roundStart.current = Date.now();
       setPaused(false);
       if (voice) speak(instruction, profile.language);
@@ -398,8 +403,7 @@ export function GameSession({
             <strong>{calibration.length}/4</strong>{' '}
             {calibration.length < 4 ? (
               <>
-                — {t(dict, 'next_corner') || 'Next:'}{' '}
-                <b>{nextCornerName}</b>
+                — {t(dict, 'next_corner') || 'Next:'} <b>{nextCornerName}</b>
               </>
             ) : (
               t(dict, 'calibration_complete') || 'Calibration complete!'
@@ -462,9 +466,7 @@ export function GameSession({
         <>
           <p className="game-status" aria-live="polite">
             {frame.hand_present ? '✋ ' : ''}
-            {placed === total
-              ? t(dict, 'complete')
-              : `${t(dict, 'score')}: ${placed}/${total}`}
+            {placed === total ? t(dict, 'complete') : `${t(dict, 'score')}: ${placed}/${total}`}
           </p>
           <div className="game-actions">
             <button

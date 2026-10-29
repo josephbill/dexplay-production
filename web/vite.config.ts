@@ -4,16 +4,39 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
   plugins: [react(), VitePWA({
-    strategies: 'injectManifest', srcDir: 'src', filename: 'sw.ts', registerType: 'autoUpdate',
-    injectRegister: 'auto', includeAssets: ['icons/*.svg', 'mat.svg'],
-    manifest: { name: 'DexPlay — Dexterity Coach', short_name: 'DexPlay', description: 'Offline-first dexterity practice for children and clinics',
-      theme_color: '#fff8ed', background_color: '#fff8ed', display: 'standalone', orientation: 'any',
-      start_url: '/', scope: '/', lang: 'en', categories: ['health', 'education'],
-      icons: [{ src: '/icons/icon-192.svg', sizes: '192x192', type: 'image/svg+xml', purpose: 'any' },
-        { src: '/icons/icon-512.svg', sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }] },
-    injectManifest: { globPatterns: ['**/*.{js,css,html,svg,json,wasm}'], maximumFileSizeToCacheInBytes: 15 * 1024 * 1024 },
-    devOptions: { enabled: false },
-  })],
+  registerType: 'autoUpdate',
+  workbox: {
+    globPatterns: ['**/*.{js,css,html,svg,png,woff2,js}'],
+    // Small launchers ship with the app; the multi-MB WASM/model are runtime-cached.
+    // Bump only if you later decide to precache them intentionally.
+    maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
+    cleanupOutdatedCaches: true,
+    navigateFallback: '/index.html',
+    navigateFallbackDenylist: [/^\/api/],
+    runtimeCaching: [
+      {
+        // MediaPipe WASM: fetch the variant the device needs, cache forever.
+        urlPattern: /\/wasm\/.*\.wasm$/,
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'dexplay-mediapipe-wasm',
+          expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 365 },
+          cacheableResponse: { statuses: [0, 200] },
+        },
+      },
+      {
+        // MediaPipe model: 7.8 MB, fetched once per device, cached forever.
+        urlPattern: /\/models\/.*\.task$/,
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'dexplay-models',
+          expiration: { maxEntries: 2, maxAgeSeconds: 60 * 60 * 24 * 365 },
+          cacheableResponse: { statuses: [0, 200] },
+        },
+      },
+    ],
+  },
+})],
   server: { proxy: { '/api': { target: 'http://localhost:8000', changeOrigin: true, rewrite: (path) => path.replace(/^\/api/, '') } } },
   build: { target: 'es2022', sourcemap: false },
 })
