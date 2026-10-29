@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
+
 function inside(point, polygon) {
     let hit = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -11,6 +12,7 @@ function inside(point, polygon) {
     }
     return hit;
 }
+
 // The printed decoration coordinates are relative to the calibration dots in mat.svg.
 const matMarkers = [
     { u: 101 / 384, v: 82 / 261 },
@@ -24,6 +26,7 @@ const matBoxes = [
     { u: (46 + 191 - 36) / (2 * 384), v: (165 + 243 - 36) / (2 * 261) },
     { u: (229 + 374 - 36) / (2 * 384), v: (165 + 243 - 36) / (2 * 261) },
 ];
+
 function mapMatPoint(u, v, corners) {
     const [topLeft, topRight, bottomRight, bottomLeft] = corners;
     return [
@@ -31,6 +34,7 @@ function mapMatPoint(u, v, corners) {
         topLeft[1] * (1 - u) * (1 - v) + topRight[1] * u * (1 - v) + bottomRight[1] * u * v + bottomLeft[1] * (1 - u) * v,
     ];
 }
+
 function zonePolygons(corners) {
     if (corners.length !== 4)
         return [];
@@ -46,9 +50,11 @@ function zonePolygons(corners) {
         ['yellow', [center, right, bottomRight, bottom]],
     ];
 }
+
 function zoneForPoint(point, corners) {
     return zonePolygons(corners).find(([, polygon]) => inside(point, polygon))?.[0] ?? null;
 }
+
 function isPrintedBox(bounds, corners, width, height) {
     if (corners.length !== 4)
         return false;
@@ -69,6 +75,7 @@ function isPrintedBox(bounds, corners, width, height) {
     }
     return false;
 }
+
 function isPrintedMarker(point, area, corners, width, height) {
     if (corners.length !== 4)
         return false;
@@ -87,6 +94,7 @@ function isPrintedMarker(point, area, corners, width, height) {
     }
     return false;
 }
+
 async function openCv() {
     const imported = await import('@techstark/opencv-js');
     let cv = imported.default ?? imported;
@@ -103,7 +111,22 @@ async function openCv() {
         throw new Error('OpenCV WASM did not initialize');
     return cv;
 }
-export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCorner, onFrame, onCameraReady, onCameraStatus, calibrationEnabled = true }) {
+
+const CORNER_LABELS = ['corner_top_left', 'corner_top_right', 'corner_bottom_right', 'corner_bottom_left'];
+
+export function CameraCoach({
+    active,
+    clinic,
+    dict,
+    calibration,
+    deviceId,
+    onCorner,
+    onCornerRelease,
+    onFrame,
+    onCameraReady,
+    onCameraStatus,
+    calibrationEnabled = true,
+}) {
     const videoRef = useRef(null), canvasRef = useRef(null), streamRef = useRef(null);
     const calibrationRef = useRef(calibration);
     calibrationRef.current = calibration;
@@ -113,26 +136,59 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
     readyCallbackRef.current = onCameraReady;
     const statusCallbackRef = useRef(onCameraStatus);
     statusCallbackRef.current = onCameraStatus;
+    const onCornerRef = useRef(onCorner);
+    onCornerRef.current = onCorner;
+    const onCornerReleaseRef = useRef(onCornerRelease);
+    onCornerReleaseRef.current = onCornerRelease;
+
     const [error, setError] = useState(''), [ready, setReady] = useState(false), [cvReady, setCvReady] = useState(false), [corners, setCorners] = useState(calibration);
     const [fps, setFps] = useState(0), [frame, setFrame] = useState({ objects: [], hand_present: false, ts: 0 }), [attempt, setAttempt] = useState(0);
+
     const activeRef = useRef(active);
     activeRef.current = active;
+
+    // Tap debounce — guards against pointerdown + mousedown double-fire on touch devices.
+    const lastTapTs = useRef(0);
+
     const width = clinic && window.innerWidth > 850 ? 320 : 240;
     const height = clinic && window.innerWidth > 850 ? 240 : 180;
+
     useEffect(() => setCorners(calibration), [calibration]);
+
+    // Single source of truth for corner changes. Debounced + guarded.
+    const emitCornerChange = useCallback((next, reason) => {
+        const now = Date.now();
+        if (now - lastTapTs.current < 350) return false;
+        lastTapTs.current = now;
+        setCorners(next);
+        onCornerRef.current?.(next, reason);
+        return true;
+    }, []);
+
     const tapCorner = useCallback((event) => {
-        if (!calibrationEnabled || !ready || corners.length >= 4)
-            return;
+        if (!calibrationEnabled || !ready || corners.length >= 4) return;
+        // Prevent default so synthetic mouse events don't double-fire after pointer events.
+        event.preventDefault();
         const rect = event.currentTarget.getBoundingClientRect();
-        const point = [Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))];
-        const next = [...corners, point];
-        setCorners(next);
-        onCorner(next);
-    }, [calibrationEnabled, corners, onCorner, ready]);
-    const updateCorners = (next) => {
-        setCorners(next);
-        onCorner(next);
+        const point = [
+            Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+            Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+        ];
+        emitCornerChange([...corners, point], 'tap');
+    }, [calibrationEnabled, corners, ready, emitCornerChange]);
+
+    const undoCorner = () => {
+        if (corners.length === 0) return;
+        emitCornerChange(corners.slice(0, -1), 'undo');
+        onCornerReleaseRef.current?.();
     };
+
+    const resetCalibration = () => {
+        if (corners.length === 0) return;
+        emitCornerChange([], 'reset');
+        onCornerReleaseRef.current?.();
+    };
+
     const stopCamera = useCallback(() => {
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
@@ -143,6 +199,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
         context?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         setFrame({ objects: [], hand_present: false, ts: 0 });
     }, []);
+
     useEffect(() => {
         if (!active) {
             setReady(false);
@@ -157,11 +214,17 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
         setError('');
         setReady(false);
         setCvReady(false);
+
         const start = async () => {
             try {
                 if (!navigator.mediaDevices?.getUserMedia)
                     throw new Error('camera-unavailable');
-                const videoConstraints = { ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }), width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 10, max: 10 } };
+                const videoConstraints = {
+                    ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
+                    width: { ideal: width },
+                    height: { ideal: height },
+                    frameRate: { ideal: 10, max: 10 },
+                };
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
                 if (stopped) {
                     stream.getTracks().forEach(track => track.stop());
@@ -175,21 +238,22 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                 canvas.width = width;
                 canvas.height = height;
                 setReady(true);
+
                 cv = await openCv();
-                if (stopped)
-                    return;
+                if (stopped) return;
+
                 const ctx = canvas.getContext('2d', { willReadFrequently: true });
-                if (!ctx)
-                    throw new Error('Could not create the camera processing canvas.');
+                if (!ctx) throw new Error('Could not create the camera processing canvas.');
+
                 let lastProcess = -Infinity, lastUiUpdate = -Infinity;
                 const process = (now) => {
-                    if (stopped || !activeRef.current)
-                        return;
+                    if (stopped || !activeRef.current) return;
                     try {
                         if (now - lastProcess >= 200 && video.readyState >= 2 && calibrationRef.current.length === 4) {
                             lastProcess = now;
                             ctx.drawImage(video, 0, 0, width, height);
                             const pixels = ctx.getImageData(0, 0, width, height), data = pixels.data;
+
                             if (!balance) {
                                 let r = 0, g = 0, b = 0, n = 0;
                                 for (let i = 0; i < data.length; i += 16) {
@@ -199,7 +263,11 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                     n++;
                                 }
                                 const mean = (r + g + b) / (3 * n);
-                                balance = { r: Math.min(1.35, Math.max(.72, mean / (r / n || mean))), g: Math.min(1.35, Math.max(.72, mean / (g / n || mean))), b: Math.min(1.35, Math.max(.72, mean / (b / n || mean))) };
+                                balance = {
+                                    r: Math.min(1.35, Math.max(.72, mean / (r / n || mean))),
+                                    g: Math.min(1.35, Math.max(.72, mean / (g / n || mean))),
+                                    b: Math.min(1.35, Math.max(.72, mean / (b / n || mean))),
+                                };
                             }
                             for (let i = 0; i < data.length; i += 4) {
                                 data[i] = Math.min(255, data[i] * balance.r);
@@ -207,6 +275,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                 data[i + 2] = Math.min(255, data[i + 2] * balance.b);
                             }
                             ctx.putImageData(pixels, 0, 0);
+
                             const src = cv.imread(canvas), hsv = new cv.Mat(), objects = [];
                             try {
                                 cv.cvtColor(src, hsv, cv.COLOR_RGBA2HSV);
@@ -232,31 +301,24 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                                 const contour = contours.get(i);
                                                 try {
                                                     const area = cv.contourArea(contour);
-                                                    if (area < 12 || area > width * height * .12)
-                                                        continue;
+                                                    if (area < 12 || area > width * height * .12) continue;
                                                     const bounds = cv.boundingRect(contour);
-                                                    if (isPrintedBox(bounds, calibrationRef.current, width, height))
-                                                        continue;
+                                                    if (isPrintedBox(bounds, calibrationRef.current, width, height)) continue;
                                                     const moments = cv.moments(contour);
-                                                    if (!moments.m00)
-                                                        continue;
+                                                    if (!moments.m00) continue;
                                                     const cx = moments.m10 / moments.m00 / width, cy = moments.m01 / moments.m00 / height;
-                                                    if (isPrintedMarker([cx, cy], area, calibrationRef.current, width, height))
-                                                        continue;
+                                                    if (isPrintedMarker([cx, cy], area, calibrationRef.current, width, height)) continue;
                                                     const zone_id = zoneForPoint([cx, cy], calibrationRef.current);
                                                     objects.push({ color: range.color, cx, cy, zone_id, area });
-                                                }
-                                                finally {
+                                                } finally {
                                                     contour.delete();
                                                 }
                                             }
-                                        }
-                                        finally {
+                                        } finally {
                                             contours.delete();
                                             hierarchy.delete();
                                         }
-                                    }
-                                    finally {
+                                    } finally {
                                         mask.delete();
                                     }
                                 }
@@ -265,8 +327,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                 try {
                                     cv.inRange(hsv, skinLow, skinHigh, skin);
                                     handPresent = cv.countNonZero(skin) > width * height * .025;
-                                }
-                                finally {
+                                } finally {
                                     skin.delete();
                                 }
                                 const result = { objects, hand_present: handPresent, ts: Date.now() };
@@ -275,8 +336,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                     lastUiUpdate = now;
                                 }
                                 callbackRef.current(result);
-                            }
-                            finally {
+                            } finally {
                                 src.delete();
                                 hsv.delete();
                             }
@@ -292,8 +352,7 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                                 fpsStart = now;
                             }
                         }
-                    }
-                    catch (err) {
+                    } catch (err) {
                         if (!stopped) {
                             stopped = true;
                             window.clearTimeout(timer);
@@ -308,18 +367,20 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
                     timer = window.setTimeout(() => process(performance.now()), 100);
                 };
                 timer = window.setTimeout(() => process(performance.now()), 0);
-            }
-            catch (err) {
+            } catch (err) {
                 if (!stopped) {
                     const hasLivePreview = Boolean(streamRef.current?.active);
-                    if (!hasLivePreview)
-                        stopCamera();
+                    if (!hasLivePreview) stopCamera();
                     const name = err instanceof Error ? err.name : '';
-                    const message = name === 'NotAllowedError' || name === 'SecurityError'
-                        ? t(dict, 'camera_denied')
-                        : (err instanceof Error && err.message === 'camera-unavailable') || name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'NotReadableError'
-                            ? t(dict, 'camera_error')
-                            : `${t(dict, 'camera_processing_error')} ${err instanceof Error ? err.message : ''}`.trim();
+                    const message =
+                        name === 'NotAllowedError' || name === 'SecurityError'
+                            ? t(dict, 'camera_denied')
+                            : (err instanceof Error && err.message === 'camera-unavailable') ||
+                              name === 'NotFoundError' ||
+                              name === 'OverconstrainedError' ||
+                              name === 'NotReadableError'
+                                ? t(dict, 'camera_error')
+                                : `${t(dict, 'camera_processing_error')} ${err instanceof Error ? err.message : ''}`.trim();
                     setError(message);
                     setReady(hasLivePreview);
                     setCvReady(false);
@@ -338,25 +399,92 @@ export function CameraCoach({ active, clinic, dict, calibration, deviceId, onCor
             statusCallbackRef.current?.('stopped');
         };
     }, [active, attempt, clinic, dict, deviceId, stopCamera]);
+
     const retryCamera = () => {
         setError('');
         setAttempt(value => value + 1);
     };
+
     const zones = zonePolygons(corners);
-    return <section className="camera-card" aria-label={t(dict, 'camera')}>
-    <div className="camera-frame" style={{ aspectRatio: `${width} / ${height}` }} onPointerDown={tapCorner} role={calibrationEnabled && corners.length < 4 ? 'button' : undefined} tabIndex={calibrationEnabled && corners.length < 4 ? 0 : undefined} aria-label={calibrationEnabled && corners.length < 4 ? t(dict, 'corner') : t(dict, 'camera')}>
-      <video ref={videoRef} playsInline muted aria-hidden="true"/>
-      <canvas ref={canvasRef} aria-label={t(dict, 'camera')}/>
-      {frame.objects.map((object, index) => <span key={`${object.color}-${index}`} className={`detected-object detected-${object.color}`} style={{ left: `${object.cx * 100}%`, top: `${object.cy * 100}%` }} aria-hidden="true"/>)}
-      {corners.map((point, index) => <span key={index} className="calibration-dot" style={{ left: `${point[0] * 100}%`, top: `${point[1] * 100}%` }}>{index + 1}</span>)}
-      {ready && cvReady && corners.length === 4 && <svg className="zone-grid" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">{zones.map(([color, polygon]) => <polygon key={color} className={`zone zone-${color}`} points={polygon.map(point => point.join(',')).join(' ')}/>)}</svg>}
-      {active && !ready && !error && <div className="camera-placeholder">{t(dict, 'cv_loading')}</div>}
-    </div>
-    <div className="camera-status"><span>{error || (!active ? t(dict, 'camera_paused') : !ready || !cvReady ? t(dict, 'cv_loading') : corners.length < 4 ? `${t(dict, 'corner')} ${corners.length + 1}/4` : t(dict, 'calibrated'))}</span><span aria-label="frames per second">{fps} FPS</span></div>
-    {error && <button className="button secondary" onClick={retryCamera} disabled={!active}>{t(dict, 'camera_retry')}</button>}
-    {calibrationEnabled && corners.length > 0 && <div className="camera-actions"><button className="button secondary" onClick={() => updateCorners(corners.slice(0, -1))}>{t(dict, 'undo_corner')}</button><button className="button secondary" onClick={() => updateCorners([])}>{t(dict, 'reset_calibration')}</button></div>}
-    <p className="privacy-note">{t(dict, 'camera_privacy')}</p>
-    <div className="sr-only" aria-live="polite">{frame.objects.length} objects detected{frame.hand_present ? ' and hand present' : ''}</div>
-  </section>;
+    const nextIndex = corners.length;
+    const nextCornerLabel = nextIndex < 4 ? (t(dict, CORNER_LABELS[nextIndex]) || CORNER_LABELS[nextIndex]) : null;
+
+    return (
+        <section className="camera-card" aria-label={t(dict, 'camera')}>
+            <div
+                className="camera-frame"
+                style={{ aspectRatio: `${width} / ${height}` }}
+                onPointerDown={tapCorner}
+                role={calibrationEnabled && corners.length < 4 ? 'button' : undefined}
+                tabIndex={calibrationEnabled && corners.length < 4 ? 0 : undefined}
+                aria-label={calibrationEnabled && corners.length < 4
+                    ? `${t(dict, 'corner')} ${nextIndex + 1}/4${nextCornerLabel ? ` – ${nextCornerLabel}` : ''}`
+                    : t(dict, 'camera')}
+            >
+                <video ref={videoRef} playsInline muted aria-hidden="true" />
+                <canvas ref={canvasRef} aria-label={t(dict, 'camera')} />
+                {frame.objects.map((object, index) => (
+                    <span
+                        key={`${object.color}-${index}`}
+                        className={`detected-object detected-${object.color}`}
+                        style={{ left: `${object.cx * 100}%`, top: `${object.cy * 100}%` }}
+                        aria-hidden="true"
+                    />
+                ))}
+                {corners.map((point, index) => (
+                    <span
+                        key={index}
+                        className="calibration-dot"
+                        style={{ left: `${point[0] * 100}%`, top: `${point[1] * 100}%` }}
+                    >
+                        {index + 1}
+                    </span>
+                ))}
+                {ready && cvReady && corners.length === 4 && (
+                    <svg className="zone-grid" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+                        {zones.map(([color, polygon]) => (
+                            <polygon
+                                key={color}
+                                className={`zone zone-${color}`}
+                                points={polygon.map(point => point.join(',')).join(' ')}
+                            />
+                        ))}
+                    </svg>
+                )}
+                {active && !ready && !error && <div className="camera-placeholder">{t(dict, 'cv_loading')}</div>}
+            </div>
+            <div className="camera-status">
+                <span>
+                    {error ||
+                        (!active
+                            ? t(dict, 'camera_paused')
+                            : !ready || !cvReady
+                              ? t(dict, 'cv_loading')
+                              : corners.length < 4
+                                ? `${t(dict, 'corner')} ${corners.length + 1}/4${nextCornerLabel ? ` – ${nextCornerLabel}` : ''}`
+                                : t(dict, 'calibrated'))}
+                </span>
+                <span aria-label="frames per second">{fps} FPS</span>
+            </div>
+            {error && (
+                <button className="button secondary" onClick={retryCamera} disabled={!active}>
+                    {t(dict, 'camera_retry')}
+                </button>
+            )}
+            {calibrationEnabled && corners.length > 0 && (
+                <div className="camera-actions">
+                    <button className="button secondary" onClick={undoCorner}>
+                        {t(dict, 'undo_corner')}
+                    </button>
+                    <button className="button secondary" onClick={resetCalibration}>
+                        {t(dict, 'reset_calibration')}
+                    </button>
+                </div>
+            )}
+            <p className="privacy-note">{t(dict, 'camera_privacy')}</p>
+            <div className="sr-only" aria-live="polite">
+                {frame.objects.length} objects detected{frame.hand_present ? ' and hand present' : ''}
+            </div>
+        </section>
+    );
 }
-// @ts-nocheck

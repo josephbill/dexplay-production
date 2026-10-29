@@ -1,2 +1,201 @@
 .camera-card{display:grid;gap:9px}.camera-frame{position:relative;width:min(100%,86.66vh);margin-inline:auto;background:#161b22;border-radius:20px;overflow:hidden;aspect-ratio:4/3;touch-action:manipulation}.camera-frame video,.camera-frame canvas{position:absolute;width:100%;height:100%;inset:0;object-fit:fill}.camera-frame canvas{pointer-events:none}.camera-placeholder{position:absolute;inset:0;display:grid;place-items:center;color:white;text-align:center;padding:25px;background:#202936;pointer-events:none}.calibration-dot{position:absolute;transform:translate(-50%,-50%);z-index:2;width:32px;height:32px;border:3px solid white;border-radius:50%;background:#f8b541;color:#3a2a14;display:grid;place-items:center;font-weight:800}.detected-object{position:absolute;z-index:2;transform:translate(-50%,-50%);width:22px;height:22px;border:3px solid white;border-radius:50%;box-shadow:0 0 0 2px #172f42;background:transparent;pointer-events:none}.detected-red{box-shadow:0 0 0 3px #e74b42}.detected-blue{box-shadow:0 0 0 3px #3576dc}.detected-green{box-shadow:0 0 0 3px #37a867}.detected-yellow{box-shadow:0 0 0 3px #d7a900}.zone-grid{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.32}.zone{stroke:white;stroke-width:.006}.zone-red{fill:#e74b42}.zone-blue{fill:#3576dc}.zone-green{fill:#37a867}.zone-yellow{fill:#e9bc32}.camera-status{display:flex;justify-content:space-between;gap:12px;color:#566176;font-size:.9rem;align-items:center}.camera-actions{display:flex;gap:8px;flex-wrap:wrap}.privacy-note,.hint{font-size:.9rem;color:#687283}
 .camera-bench{padding:28px 16px}.bench-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;align-items:end;margin:20px 0}.bench-controls label{display:grid;gap:7px}.bench-controls select{padding:12px;border:1px solid #d9dfe8;border-radius:10px;background:white}.bench-results{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0}.bench-results article{display:grid;gap:7px}.bench-results strong{font-size:2rem;color:#a96616}.bench-results small{color:#687283}
+/* =========================================================
+   Calibration panel — corner selection feedback
+   ========================================================= */
+
+.calibration-panel {
+  /* inherits .mode-picker; just a hook in case you want to tweak */
+}
+
+/* --- Corner progress row --- */
+.corner-progress {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  margin: 1rem 0 0.75rem;
+}
+
+/* --- Individual corner badge --- */
+.corner-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.75rem 0.25rem;
+  min-height: 72px;
+  border: 2px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #64748b;
+  transition:
+    border-color 0.25s ease,
+    background-color 0.25s ease,
+    color 0.25s ease,
+    transform 0.2s ease;
+  user-select: none;
+}
+
+/* Done state */
+.corner-badge.done {
+  border-style: solid;
+  border-color: #22c55e;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+/* Just-captured pulse (1.2s window from parent state) */
+.corner-badge.pulse {
+  animation: cornerPulse 0.7s ease;
+}
+
+.corner-badge.pulse.done {
+  border-color: #16a34a;
+  background: #dcfce7;
+}
+
+/* Icon (arrow when pending, ✓ when done) */
+.corner-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  font-weight: 600;
+  transition: transform 0.2s ease;
+}
+
+.corner-badge.done .corner-icon {
+  animation: cornerCheck 0.35s ease;
+}
+
+/* Label */
+.corner-label {
+  font-size: 0.7rem;
+  line-height: 1.1;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+/* --- Progress counter line --- */
+.corner-counter {
+  text-align: center;
+  font-size: 0.95rem;
+  margin: 0.25rem 0 0.75rem;
+  color: #334155;
+}
+
+.corner-counter strong {
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.corner-counter b {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+/* --- Animations --- */
+@keyframes cornerPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.65);
+  }
+  40% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes cornerCheck {
+  0% {
+    transform: scale(0.4) rotate(-15deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.25) rotate(4deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* --- Reduce-motion accessibility --- */
+@media (prefers-reduced-motion: reduce) {
+  .corner-badge,
+  .corner-badge.pulse,
+  .corner-badge.done .corner-icon {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* --- Small screens: stack the badges to 2×2 --- */
+@media (max-width: 420px) {
+  .corner-progress {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .corner-badge {
+    min-height: 64px;
+    padding: 0.5rem 0.25rem;
+  }
+  .corner-label {
+    font-size: 0.65rem;
+  }
+}
+
+/* =========================================================
+   Existing CameraCoach bits — only include if not already styled
+   ========================================================= */
+
+/* The video frame itself — matches the inline aspectRatio */
+.camera-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #0f172a;
+  cursor: pointer; /* hint that taps add corners during calibration */
+}
+
+.camera-frame[role="button"]:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.camera-frame video,
+.camera-frame canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Calibration dots already placed on the frame */
+.calibration-dot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: dotIn 0.3s ease;
+}
+
+@keyframes dotIn {
+  from { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  to   { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+}
