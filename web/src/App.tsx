@@ -31,7 +31,7 @@ export default function App() {
     if (import.meta.env.DEV && location.pathname === '/camera-bench')
         return <CameraBench />;
     const [language, setLanguage] = useState(detectLanguage()), [profile, setProfile] = useState(null), [group, setGroup] = useState(null);
-    const [patients, setPatients] = useState([]), [route, setRoute] = useState('home'), [calibration, setCalibration] = useState([]);
+    const [patients, setPatients] = useState([]), [route, setRoute] = useState('home'), [calibration, setCalibration] = useState([]), [cameraStatus, setCameraStatus] = useState('stopped');
     const [theme, setTheme] = useState('child'), [highContrast, setHighContrast] = useState(false), [voice, setVoice] = useState(true);
     const [apiKey, setApiKey] = useState(''), [online, setOnline] = useState(navigator.onLine), [pending, setPending] = useState(0), [installPrompt, setInstallPrompt] = useState(null);
     const [cloudReport, setCloudReport] = useState(null), [resources, setResources] = useState([]);
@@ -129,11 +129,12 @@ export default function App() {
         setRoute('calibrate');
     }, []);
     const changePatient = async (next) => { setProfile(next); await setSetting('current-profile', next); setCalibration(await getSetting(`calibration:${next.id}`, [])); setRoute('home'); };
-    const onCalibration = async (points) => { setCalibration(points); if (points.length === 4) {
+    const onCalibration = async (points) => {
+        setCalibration(points);
         await setSetting('calibration:default', points);
         if (profile)
             await setSetting(`calibration:${profile.id}`, points);
-    } };
+    };
     const finishGame = async (session, _rounds, result) => {
         setCloudReport(null);
         if (result) {
@@ -196,7 +197,7 @@ export default function App() {
     <div className="app-layout"><nav className="side-nav" aria-label="Main navigation">{nav.map(([path, label, icon]) => <button key={path} className={route === path ? 'active' : ''} onClick={() => setRoute(path)}><span className="nav-icon" aria-hidden="true">{icon}</span><span>{localText(dict, label)}</span></button>)}<div className="nav-spacer"/><a className="mat-link" href="/mat.svg" target="_blank" rel="noreferrer">▧ {localText(dict, 'mat')}</a></nav>
       <main className="content-area">
         {error && <div className="alert error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}{notice && <div className="alert success" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss">×</button></div>}
-        {route === 'calibrate' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'camera')}</p><h1>{localText(dict, 'mat')}</h1><p>{localText(dict, 'camera_help')}</p><a className="button secondary" href="/mat.svg" target="_blank" rel="noreferrer">{localText(dict, 'mat')}</a></div><CameraCoach active clinic={clinic} dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={() => { }}/>{calibration.length === 4 && <button className="button primary large" onClick={() => setRoute('home')}>{localText(dict, 'calibrated')} · {localText(dict, 'continue')}</button>}</section>}
+        {route === 'calibrate' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'camera')}</p><h1>{localText(dict, 'mat')}</h1><p>{localText(dict, 'camera_help')}</p><a className="button secondary" href="/mat.svg" target="_blank" rel="noreferrer">{localText(dict, 'mat')}</a></div><CameraCoach active clinic dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={() => { }} onCameraStatus={setCameraStatus}/>{calibration.length === 4 && <button className="button primary large" disabled={cameraStatus !== 'ready'} onClick={() => setRoute('home')}>{localText(dict, 'calibrated')} · {localText(dict, 'continue')}</button>}</section>}
         {route === 'home' && <HomeScreen profile={profile} clinic={clinic} dict={dict} patients={patients} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')} onPrint={() => setRoute('reports')}/>}
         {route === 'play' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'play')}</p><h1>{profile.name}, {localText(dict, 'welcome')}</h1><p>{localText(dict, 'camera_privacy')}</p></div><GameSession profile={profile} clinic={clinic} voice={voice} dict={dict} calibration={calibration} onCalibration={onCalibration} apiKey={apiKey} onFinished={finishGame} onClose={() => setRoute('home')}/></section>}
         {route === 'patients' && clinic && <ClinicScreen profile={profile} patients={patients} dict={dict} onSwitch={changePatient} onAdd={() => setRoute('setup')} onPlay={() => setRoute('play')}/>}

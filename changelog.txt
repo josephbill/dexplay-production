@@ -1,0 +1,7 @@
+: CameraCoach.tsx, GameSession.tsx, App.tsx, and mat.svg.
+
+- Limit processing to 10 FPS, give the browser time between frames, and reduce UI updates.
+- Keep the preview and processing image aligned; show corner progress, with undo, reset, and camera retry controls.
+- Require the camera to be processing successfully before calibration can continue or a game can start; pause the game if camera processing fails.
+- Show detected pieces and calibrated zones, while filtering out the mat’s printed decorations.
+- Clarify the preview-tapping instructions on the mat and in all supported languages.
