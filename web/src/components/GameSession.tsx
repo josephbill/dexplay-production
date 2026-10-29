@@ -16,9 +16,9 @@ function speak(text, language) {
 export function GameSession({ profile, clinic, voice, dict, calibration, onCalibration, apiKey, onFinished, onClose }) {
     const [mode, setMode] = useState('sort_place'), [started, setStarted] = useState(false), [paused, setPaused] = useState(false), [resumePending, setResumePending] = useState(false), [cameraStatus, setCameraStatus] = useState('starting'), [roundNum, setRoundNum] = useState(1);
     const [seconds, setSeconds] = useState(60), [placed, setPlaced] = useState(0), [fumbles, setFumbles] = useState(0), [frame, setFrame] = useState({ objects: [], hand_present: false, ts: 0 }), [saving, setSaving] = useState(false), [error, setError] = useState('');
-    const prevRight = useRef(false), prevWrong = useRef(false), roundStart = useRef(0), rowsRef = useRef([]), lastUiFrame = useRef(0);
+    const prevRight = useRef(false), prevWrong = useRef(false), roundStart = useRef(0), rowsRef = useRef([]), lastUiFrame = useRef(0), waitingForCamera = useRef(false);
     const target = colors[(roundNum - 1) % colors.length], total = 4;
-    const cameraOn = !started || !paused || resumePending;
+    const cameraOn = !started || !paused || resumePending || cameraStatus === 'starting' || cameraStatus === 'error';
     const instruction = useMemo(() => t(dict, 'target', { color: t(dict, `target_${target}`) }), [dict, target]);
     const handleFrame = useCallback((next) => {
         if (next.ts - lastUiFrame.current >= 250) {
@@ -39,6 +39,10 @@ export function GameSession({ profile, clinic, voice, dict, calibration, onCalib
     const handleCameraStatus = useCallback((status) => {
         setCameraStatus(status);
         if (status === 'ready' && started) {
+            if (waitingForCamera.current) {
+                roundStart.current = Date.now();
+                waitingForCamera.current = false;
+            }
             if (resumePending) {
                 setResumePending(false);
                 setPaused(false);
@@ -111,7 +115,7 @@ export function GameSession({ profile, clinic, voice, dict, calibration, onCalib
     const session = useMemo(() => ({ id: crypto.randomUUID(), profile_id: profile.id, patient_id: clinic ? profile.id : undefined, started_at: new Date().toISOString(), difficulty_params: profile.difficulty, mode }), [profile, clinic, mode]);
     useEffect(() => { if (started && !paused && cameraStatus === 'ready' && seconds === 0)
         void completeRound(); }, [seconds, started, paused, cameraStatus, completeRound]);
-    const start = () => { rowsRef.current = []; setRoundNum(1); setPlaced(0); setFumbles(0); setSeconds(60); roundStart.current = Date.now(); setStarted(true); setPaused(false); if (voice)
+    const start = () => { rowsRef.current = []; setRoundNum(1); setPlaced(0); setFumbles(0); setSeconds(60); waitingForCamera.current = cameraStatus !== 'ready'; roundStart.current = Date.now(); setStarted(true); setPaused(false); if (voice)
         speak(instruction, profile.language); };
     const resume = () => {
         if (cameraStatus === 'ready') {
@@ -125,7 +129,7 @@ export function GameSession({ profile, clinic, voice, dict, calibration, onCalib
     return <section className="game-view" aria-label={t(dict, 'play_title')}>
     {!started && <div className="mode-picker"><h2>{t(dict, 'play_title')}</h2><div className="mode-grid">
       {['sort_place', 'stack', 'thread', 'button'].map((item, index) => <button key={item} className={`mode-card ${mode === item ? 'selected' : ''}`} onClick={() => setMode(item)} aria-pressed={mode === item}><span aria-hidden="true">{['🔴', '🧱', '🧵', '🟡'][index]}</span><strong>{t(dict, item)}</strong></button>)}
-    </div><a className="text-link" href="/mat.svg" target="_blank" rel="noreferrer">{t(dict, 'mat')}</a>{calibration.length !== 4 && <p className="notice">{t(dict, 'camera_help')}</p>}<button className="button primary large" disabled={calibration.length !== 4 || cameraStatus !== 'ready'} onClick={start}>{t(dict, 'start')}</button></div>}
+    </div><a className="text-link" href="/mat.svg" target="_blank" rel="noreferrer">{t(dict, 'mat')}</a>{calibration.length !== 4 ? <p className="notice">{t(dict, 'camera_help')}</p> : cameraStatus !== 'ready' && <p className="notice">{t(dict, 'camera_waiting')}</p>}<button className="button primary large" disabled={calibration.length !== 4} onClick={start}>{t(dict, 'start')}</button></div>}
     {started && <div className="game-top"><div><small>{t(dict, 'round')} {roundNum}/3</small><h2>{instruction}</h2></div><div className="game-score"><span>{t(dict, 'time_left')} <b>{seconds}s</b></span><span>{t(dict, 'score')} <b>{placed}/{total}</b></span></div></div>}
     <CameraCoach active={cameraOn} clinic={clinic} dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={handleFrame} onCameraStatus={handleCameraStatus} calibrationEnabled={!started}/>
     {started && <>
