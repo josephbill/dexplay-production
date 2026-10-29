@@ -7,4 +7,8 @@
   "next_corner": "Next corner:",
   "corner_captured_next": "{name} captured. Next: {next}.",
   "corner_captured_all": "{name} captured. Calibration complete!",
-  "calibration_complete": "Calibration complete!"}
+  "calibration_complete": "Calibration complete!",
+  "dwell_hint": "Hold your finger over the zone for a moment",
+  "dwell_placed": "Placed!"
+
+}
