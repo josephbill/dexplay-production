@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64
 from functools import lru_cache
+from typing import Literal
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,17 +23,27 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     data_encryption_key: str
     api_key_pepper: str
-    paypal_mode: str = "live"
+    paypal_mode: Literal["live", "sandbox"] = "live"
     paypal_client_id: str = ""
     paypal_client_secret: str = ""
     paypal_webhook_id: str = ""
     paypal_individual_plan_id: str = ""
     paypal_clinic_plan_id: str = ""
+    paypal_sandbox_client_id: str = ""
+    paypal_sandbox_client_secret: str = ""
+    paypal_sandbox_webhook_id: str = ""
+    paypal_sandbox_individual_plan_id: str = ""
+    paypal_sandbox_clinic_plan_id: str = ""
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
     twilio_messaging_service_sid: str = ""
     allowed_origins: str = ""
+
+    @field_validator("app_env", "paypal_mode", mode="before")
+    @classmethod
+    def normalize_environment_names(cls, value: str) -> str:
+        return value.strip().lower() if isinstance(value, str) else value
 
     @field_validator("data_encryption_key")
     @classmethod
@@ -60,8 +71,32 @@ class Settings(BaseSettings):
 
     @property
     def paypal_enabled(self) -> bool:
-        return all((self.paypal_client_id, self.paypal_client_secret, self.paypal_webhook_id,
-                    self.paypal_individual_plan_id, self.paypal_clinic_plan_id))
+        return all((self.active_paypal_client_id, self.active_paypal_client_secret, self.active_paypal_webhook_id,
+                    self.active_paypal_individual_plan_id, self.active_paypal_clinic_plan_id))
+
+    @property
+    def paypal_api_base(self) -> str:
+        return "https://api-m.sandbox.paypal.com" if self.paypal_mode == "sandbox" else "https://api-m.paypal.com"
+
+    @property
+    def active_paypal_client_id(self) -> str:
+        return self.paypal_sandbox_client_id if self.paypal_mode == "sandbox" else self.paypal_client_id
+
+    @property
+    def active_paypal_client_secret(self) -> str:
+        return self.paypal_sandbox_client_secret if self.paypal_mode == "sandbox" else self.paypal_client_secret
+
+    @property
+    def active_paypal_webhook_id(self) -> str:
+        return self.paypal_sandbox_webhook_id if self.paypal_mode == "sandbox" else self.paypal_webhook_id
+
+    @property
+    def active_paypal_individual_plan_id(self) -> str:
+        return self.paypal_sandbox_individual_plan_id if self.paypal_mode == "sandbox" else self.paypal_individual_plan_id
+
+    @property
+    def active_paypal_clinic_plan_id(self) -> str:
+        return self.paypal_sandbox_clinic_plan_id if self.paypal_mode == "sandbox" else self.paypal_clinic_plan_id
 
     @property
     def twilio_enabled(self) -> bool:

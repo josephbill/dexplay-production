@@ -3,15 +3,15 @@ import base64
 import httpx
 from ..config import get_settings
 
-class PayPalLive:
+class PayPalClient:
     def __init__(self):
         self.settings = get_settings()
-        if not self.settings.paypal_enabled or self.settings.paypal_mode != "live":
-            raise RuntimeError("Live PayPal credentials, webhook ID, and both plan IDs are required")
-        self.base = "https://api-m.paypal.com"
+        if not self.settings.paypal_enabled:
+            raise RuntimeError(f"{self.settings.paypal_mode.title()} PayPal credentials, webhook ID, and both plan IDs are required")
+        self.base = self.settings.paypal_api_base
         self._token: str | None = None
     async def access_token(self) -> str:
-        auth = base64.b64encode(f"{self.settings.paypal_client_id}:{self.settings.paypal_client_secret}".encode()).decode()
+        auth = base64.b64encode(f"{self.settings.active_paypal_client_id}:{self.settings.active_paypal_client_secret}".encode()).decode()
         async with httpx.AsyncClient(timeout=8) as client:
             response = await client.post(f"{self.base}/v1/oauth2/token", headers={"Authorization": f"Basic {auth}", "Accept":"application/json"}, data={"grant_type":"client_credentials"})
             response.raise_for_status()
@@ -44,8 +44,7 @@ class PayPalLive:
             "transmission_id":headers.get("paypal-transmission-id"),
             "transmission_sig":headers.get("paypal-transmission-sig"),
             "transmission_time":headers.get("paypal-transmission-time"),
-            "webhook_id":self.settings.paypal_webhook_id,
+            "webhook_id":self.settings.active_paypal_webhook_id,
             "webhook_event":event,
         })
         return result.get("verification_status") == "SUCCESS"
-

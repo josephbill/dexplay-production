@@ -15,7 +15,7 @@ from .models.entities import new_key
 from .orchestrator import orchestrate
 from .schemas import ClaimRequest, KeyActivationRequest, SubscriptionRequest, SyncRequest
 from .security import decrypt_payload, encrypt_payload, generate_api_key, hash_api_key, hash_claim
-from .services.paypal import PayPalLive
+from .services.paypal import PayPalClient
 
 log = logging.getLogger("dexplay.api")
 settings = get_settings()
@@ -100,11 +100,15 @@ async def sync(body: SyncRequest, auth=Depends(authenticated_device), db: AsyncS
         therapist_requested_reports=bool(body.usage_stats.get("therapist_requested_reports", False)))
     return result
 
+@app.get("/paypal/config")
+async def paypal_config():
+    return {"mode": settings.paypal_mode, "enabled": settings.paypal_enabled}
+
 @app.post("/paypal/create_subscription")
 async def create_subscription(body: SubscriptionRequest, db: AsyncSession = Depends(get_db)):
     if not settings.paypal_enabled:
-        raise HTTPException(503, "Live PayPal client, webhook, and active plan credentials are required")
-    client = PayPalLive()
+        raise HTTPException(503, f"{settings.paypal_mode.title()} PayPal credentials, webhook, and active plan IDs are required")
+    client = PayPalClient()
     if body.sms_consent and not body.phone_number:
         raise HTTPException(422, "A phone number is required when SMS consent is selected")
     if body.sms_consent and body.phone_number:
@@ -125,7 +129,7 @@ async def create_subscription(body: SubscriptionRequest, db: AsyncSession = Depe
         phone_encrypted=encrypt_payload({"phone": phone}) if phone else None, sms_consent=body.sms_consent)
     db.add(claim)
     await db.commit()
-    plan_id = settings.paypal_individual_plan_id if body.plan == "individual" else settings.paypal_clinic_plan_id
+    plan_id = settings.active_paypal_individual_plan_id if body.plan == "individual" else settings.active_paypal_clinic_plan_id
     return_url = f"{settings.public_origin.rstrip('/')}/payment/return?claim={activation_token}&lang={body.language}"
     try:
         response = await client.create_subscription(plan_id, reference_id, return_url)
@@ -160,7 +164,7 @@ async def claim_subscription(body: ClaimRequest, db: AsyncSession = Depends(get_
 async def paypal_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     event = await request.json()
     try:
-        verified = await PayPalLive().verify_webhook(dict(request.headers), event)
+        verified = await PayPalClient().verify_webhook(dict(request.headers), event)
     except Exception as exc:
         log.error("PayPal webhook verification error: %s", type(exc).__name__)
         raise HTTPException(502, "Could not verify PayPal event") from exc
