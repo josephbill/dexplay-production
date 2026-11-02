@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio, hashlib, hmac, logging, secrets, uuid
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from phonenumbers import NumberParseException
@@ -26,11 +27,28 @@ app = FastAPI(title="DexPlay Cloud API", version="1.0.0", docs_url=None if setti
 if not settings.cors_origins:
     raise RuntimeError("ALLOWED_ORIGINS must list the deployed PWA HTTPS origin")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Device-Key"])
+    allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Device-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"])
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+    supplied_id = request.headers.get("X-Request-ID", "")
+    request_id = supplied_id if len(supplied_id) == 36 and all(
+        char in "0123456789abcdefABCDEF-" for char in supplied_id
+    ) else str(uuid.uuid4())
+    request.state.request_id = request_id
+    started = perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        log.error("http.request_failed request_id=%s method=%s path=%s error_type=%s",
+                  request_id, request.method, request.url.path, type(exc).__name__)
+        raise
+    elapsed_ms = round((perf_counter() - started) * 1000)
+    response.headers["X-Request-ID"] = request_id
+    if request.url.path in ("/sync", "/analysis/free") or response.status_code >= 400:
+        log.info("http.request_complete request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
+                 request_id, request.method, request.url.path, response.status_code, elapsed_ms)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(self), microphone=()"
@@ -77,9 +95,14 @@ async def activate_device(body: KeyActivationRequest, db: AsyncSession = Depends
             "clinic_patient_limit": account.clinic_patient_limit}
 
 @app.post("/sync")
-async def sync(body: SyncRequest, auth=Depends(authenticated_device), db: AsyncSession = Depends(get_db)):
+async def sync(request: Request, body: SyncRequest, auth=Depends(authenticated_device), db: AsyncSession = Depends(get_db)):
+    started = perf_counter()
+    request_id = request.state.request_id
     device, account = auth
     session_id = str(body.session_data[-1].get("session_id") or body.patient_id or uuid.uuid4()) if body.session_data else str(body.patient_id or uuid.uuid4())
+    session_fingerprint = hashlib.sha256(session_id.encode()).hexdigest()[:12]
+    log.info("sync.started request_id=%s session_ref=%s rounds=%s profile_group=%s",
+             request_id, session_fingerprint, len(body.session_data), body.profile.get("group", "unknown"))
     payload = {"session_data": body.session_data, "profile": body.profile, "patient_id": body.patient_id,
                "usage_stats": body.usage_stats, "synced_at": datetime.now(timezone.utc).isoformat()}
     record = await db.get(SessionRecord, session_id)
@@ -89,17 +112,42 @@ async def sync(body: SyncRequest, auth=Depends(authenticated_device), db: AsyncS
         record.encrypted_payload = encrypt_payload(payload)
     else:
         db.add(SessionRecord(id=session_id, account_id=account.id, encrypted_payload=encrypt_payload(payload)))
-    await db.commit()
-    count = await db.scalar(select(func.count()).select_from(SessionRecord).where(SessionRecord.account_id == account.id)) or 0
+    try:
+        await db.commit()
+    except Exception as exc:
+        log.error("sync.persist_failed request_id=%s session_ref=%s error_type=%s",
+                  request_id, session_fingerprint, type(exc).__name__)
+        raise
+    log.info("sync.persisted request_id=%s session_ref=%s action=%s",
+             request_id, session_fingerprint, "updated" if record else "created")
+    try:
+        count = await db.scalar(select(func.count()).select_from(SessionRecord).where(SessionRecord.account_id == account.id)) or 0
+    except Exception as exc:
+        log.error("sync.account_session_count_failed request_id=%s session_ref=%s error_type=%s",
+                  request_id, session_fingerprint, type(exc).__name__)
+        raise
     usage = {**body.usage_stats, "free_sessions_count": max(int(body.usage_stats.get("free_sessions_count", 0)), count),
              "reports_viewed": int(body.usage_stats.get("reports_viewed", 0))}
-    result = await orchestrate(session_data=body.session_data, profile=body.profile,
-        subscription_state=account.subscription_state, usage_stats=usage,
-        resource_preferences=body.resource_preferences,
-        progress_summary={"session_count": count,
-            "improvement_pct_30d": body.usage_stats.get("improvement_pct_30d", 0),
-            "condition": body.profile.get("condition")},
-        therapist_requested_reports=bool(body.usage_stats.get("therapist_requested_reports", False)))
+    try:
+        result = await orchestrate(session_data=body.session_data, profile=body.profile,
+            subscription_state=account.subscription_state, usage_stats=usage,
+            resource_preferences=body.resource_preferences,
+            progress_summary={"session_count": count,
+                "improvement_pct_30d": body.usage_stats.get("improvement_pct_30d", 0),
+                "condition": body.profile.get("condition")},
+            therapist_requested_reports=bool(body.usage_stats.get("therapist_requested_reports", False)),
+            request_id=request_id)
+    except Exception as exc:
+        log.error("sync.orchestration_failed request_id=%s session_ref=%s error_type=%s",
+                  request_id, session_fingerprint, type(exc).__name__)
+        raise
+    audiences = [name for name, report in result.get("report", {}).items()
+                 if isinstance(report, dict) and report.get("report_text")]
+    log.info("sync.analysis_complete request_id=%s session_ref=%s report_audiences=%s "
+             "partial=%s agents_unavailable=%s elapsed_ms=%s",
+             request_id, session_fingerprint, ",".join(audiences) or "none",
+             result.get("partial", False), ",".join(result.get("agents_unavailable", [])) or "none",
+             round((perf_counter() - started) * 1000))
     return result
 
 async def enforce_free_analysis_limit(request: Request):

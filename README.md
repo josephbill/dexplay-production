@@ -29,6 +29,10 @@ The catalog starts empty by design. Populate only reviewed resources with verifi
 
 The latest web build precaches 10,785 KiB uncompressed (about 3.64 MB gzip across app, OpenCV, and service worker). The compressed transfer fits a 5 MB budget; the installed offline cache does not. The production system must be deployed behind HTTPS, with DB backups, monitoring, key rotation, privacy notices, consent flows, retention policy, and jurisdiction-specific clinical/privacy review before real patient use.
 
+## Sync diagnostics
+
+For a sync attempt, open the browser developer console and filter for `[DexPlay sync]`. Each request logs a correlation ID, source (offline queue or local history), HTTP status/latency, generated and missing report audiences, and agent availability. In Render API logs, search for that same `request_id`; the API logs persistence, per-agent start/completion/failure and timing, LLM tool/model/provider request IDs and status, and the final report audiences. These diagnostics intentionally omit access keys, profile/session identifiers, report text, and game metrics.
+
 ## API tooling
 
 Import [api/postman/DexPlay-Production.postman_collection.json](api/postman/DexPlay-Production.postman_collection.json) into Postman to explore the implemented API routes. The collection marks live PayPal subscription creation and account deletion as real side effects; the webhook route is for PayPal-signed deliveries only. Use synthetic, non-identifying practice data when exercising sync endpoints.

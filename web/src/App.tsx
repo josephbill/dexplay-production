@@ -364,17 +364,77 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         let syncedCount = 0, reportCount = 0, resourceFailureCount = 0;
         const reportFailures = new Set();
         const attemptedSessionIds = new Set();
-        const saveResponse = async (response, sessionId, profileId) => {
+        const requestSync = async (payload, source) => {
+            const requestId = crypto.randomUUID();
+            const started = performance.now();
+            console.info('[DexPlay sync] request_started', {
+                request_id: requestId,
+                source,
+                rounds: payload.session_data?.length ?? 0,
+            });
+            let response;
+            try {
+                response = await fetch(`${API}/sync`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Device-Key': apiKey,
+                        'X-Request-ID': requestId,
+                    },
+                    body: JSON.stringify(payload),
+                });
+            }
+            catch (err) {
+                console.error('[DexPlay sync] network_failed', {
+                    request_id: requestId,
+                    source,
+                    error_type: err instanceof Error ? err.name : 'UnknownError',
+                    elapsed_ms: Math.round(performance.now() - started),
+                });
+                throw err;
+            }
+            const serverRequestId = response.headers.get('X-Request-ID') || requestId;
+            console.info('[DexPlay sync] response_received', {
+                request_id: serverRequestId,
+                source,
+                status: response.status,
+                elapsed_ms: Math.round(performance.now() - started),
+            });
+            return { response, requestId: serverRequestId };
+        };
+        const saveResponse = async (response, sessionId, profileId, requestId) => {
             if (!response.ok) {
                 const body = await response.json().catch(() => ({}));
+                console.error('[DexPlay sync] response_rejected', {
+                    request_id: requestId,
+                    status: response.status,
+                });
                 throw new Error(body.detail || `Session sync failed (${response.status}).`);
             }
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            }
+            catch (err) {
+                console.error('[DexPlay sync] invalid_response_body', {
+                    request_id: requestId,
+                    status: response.status,
+                    error_type: err instanceof Error ? err.name : 'UnknownError',
+                });
+                throw err;
+            }
             const expectedAudiences = ['parent', 'therapist', 'patient'];
             const generatedAudiences = expectedAudiences
                 .filter(audience => data.report?.[audience]?.report_text);
             const hasReport = generatedAudiences.length > 0;
             const completeReport = generatedAudiences.length === expectedAudiences.length;
+            console.info('[DexPlay sync] analysis_result', {
+                request_id: requestId,
+                report_audiences: generatedAudiences,
+                missing_audiences: expectedAudiences.filter(audience => !generatedAudiences.includes(audience)),
+                agents_unavailable: data.agents_unavailable || [],
+                partial: Boolean(data.partial),
+            });
             if (hasReport) {
                 await setSetting(`report:${sessionId}`, data.report);
                 await setSetting('latest-cloud-report', data.report);
@@ -395,7 +455,10 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                     await downloadResource(item, profileId);
                 }
                 catch (err) {
-                    console.error('Resource download failed after session sync.', err);
+                    console.error('[DexPlay sync] resource_download_failed', {
+                        request_id: requestId,
+                        error_type: err instanceof Error ? err.name : 'UnknownError',
+                    });
                     resourceFailureCount++;
                 }
             }
@@ -403,10 +466,15 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                 await setSetting(`cloud-synced:${keyFingerprint}:${sessionId}`, true);
             attemptedSessionIds.add(sessionId);
         };
+        console.info('[DexPlay sync] started', {
+            queued_sessions: queue.filter(item => !item.synced).length,
+            has_active_key: Boolean(apiKey),
+            online: navigator.onLine,
+        });
         for (const row of queue.filter(item => !item.synced)) {
-            const response = await fetch(`${API}/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey }, body: JSON.stringify(row.payload) });
+            const request = await requestSync(row.payload, 'offline_queue');
             const sessionId = row.payload.session_data?.at(-1)?.session_id;
-            await saveResponse(response, sessionId || row.id, row.payload.patient_id || profile.id);
+            await saveResponse(request.response, sessionId || row.id, row.payload.patient_id || profile.id, request.requestId);
             await database.delete('sync_queue', row.id);
             syncedCount++;
         }
@@ -415,18 +483,32 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
             .filter(session => session.ended_at && (clinic || session.profile_id === profile.id))
             .sort((a, b) => a.started_at.localeCompare(b.started_at));
         const allPatients = clinic ? await database.getAll('patients') : [profile];
-        let skippedCount = 0;
+        console.info('[DexPlay sync] local_sessions_loaded', {
+            completed_sessions: allSessions.length,
+            patient_profiles: allPatients.length,
+        });
+        let skippedCount = 0, skippedFromBackfillCount = 0;
         for (const session of allSessions) {
-            if (attemptedSessionIds.has(session.id) || await getSetting(`cloud-synced:${keyFingerprint}:${session.id}`, false))
+            if (attemptedSessionIds.has(session.id)) {
+                skippedFromBackfillCount++;
                 continue;
+            }
+            if (await getSetting(`cloud-synced:${keyFingerprint}:${session.id}`, false)) {
+                skippedFromBackfillCount++;
+                continue;
+            }
             const sessionProfile = allPatients.find(item => item.id === session.profile_id);
             if (!sessionProfile) {
+                console.error('[DexPlay sync] profile_missing_for_session', {
+                    profile_count: allPatients.length,
+                });
                 throw new Error('A saved session has no matching local profile. No more sessions were synced.');
             }
             const rounds = (await database.getAllFromIndex('rounds', 'by-session', session.id))
                 .sort((a, b) => a.round_num - b.round_num);
             if (!rounds.length) {
                 skippedCount++;
+                console.warn('[DexPlay sync] completed_session_has_no_rounds');
                 continue;
             }
             const payload = {
@@ -456,8 +538,8 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                 },
                 patient_id: clinic ? sessionProfile.id : undefined,
             };
-            const response = await fetch(`${API}/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey }, body: JSON.stringify(payload) });
-            await saveResponse(response, session.id, sessionProfile.id);
+            const request = await requestSync(payload, 'local_history');
+            await saveResponse(request.response, session.id, sessionProfile.id, request.requestId);
             syncedCount++;
         }
         await onSyncComplete();
@@ -472,10 +554,21 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         setSyncMessage(resourceFailureCount
             ? `${message} ${resourceFailureCount} resource download${resourceFailureCount === 1 ? '' : 's'} failed.`
             : message);
+        console.info('[DexPlay sync] completed', {
+            uploaded_sessions: syncedCount,
+            complete_reports: reportCount,
+            report_failures: [...reportFailures],
+            sessions_without_rounds: skippedCount,
+            skipped_from_backfill: skippedFromBackfillCount,
+            resource_download_failures: resourceFailureCount,
+        });
     }
     catch (err) {
         setSyncError(true);
         setSyncMessage(err instanceof Error ? err.message : 'Sync failed.');
+        console.error('[DexPlay sync] failed', {
+            error_type: err instanceof Error ? err.name : 'UnknownError',
+        });
     }
     finally {
         setBusy(false);
