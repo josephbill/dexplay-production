@@ -141,9 +141,11 @@ export default function App() {
             if (result.analysis_unavailable)
                 setNotice('Cloud analysis is temporarily unavailable. Showing a brief summary from your on-device results.');
             const reports = result.report;
-            if (reports) {
+            if (hasReportContent(reports)) {
                 setCloudReport(reports);
                 await setSetting(`report:${session.id}`, reports);
+                if (apiKey)
+                    await setSetting(await cloudSyncMarker(session.id, apiKey), true);
             }
             const next = result.next_difficulty;
             if (next && profile) {
@@ -205,7 +207,7 @@ export default function App() {
         {route === 'patients' && clinic && <ClinicScreen profile={profile} patients={patients} dict={dict} onSwitch={changePatient} onAdd={() => setRoute('setup')} onPlay={() => setRoute('play')}/>}
         {route === 'reports' && <ReportsScreen profile={profile} clinic={clinic} dict={dict} cloudReport={cloudReport} apiKey={apiKey} onPrint={() => window.print()} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')}/>}
         {route === 'resources' && <ResourcesScreen resources={resources} dict={dict} onDelete={async (id) => { await removeResource(id); setResources(await (await db()).getAll('resource_cache')); }}/>}
-        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))}/>}
+        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))} onSyncComplete={async () => setPending(await pendingSyncCount())}/>}
       </main>
     </div>
     <nav className="mobile-nav" aria-label="Main navigation">{nav.map(([path, label, icon]) => <button key={path} className={route === path ? 'active' : ''} onClick={() => setRoute(path)}><span aria-hidden="true">{icon}</span><small>{localText(dict, label)}</small></button>)}</nav>
@@ -272,8 +274,9 @@ function ResourcePreview({ item }) { const [url, setUrl] = useState(''); useEffe
 } }); return () => { if (objectUrl)
     URL.revokeObjectURL(objectUrl); }; }, [item.url]); if (!url)
     return <p>Offline file could not be opened. Re-download it while online.</p>; return item.type === 'video' ? <video controls playsInline src={url} className="resource-player"/> : <iframe title={item.title} src={url} className="resource-document"/>; }
-function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, voice, apiKey, reminderTime, notifyPermission, installPrompt, onLanguage, onProfileLanguage, onTheme, onContrast, onVoice, onApiKey, onReminder, onPermission, onDelete, onRefreshInstall, onResources }) {
+function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, voice, apiKey, reminderTime, notifyPermission, installPrompt, onLanguage, onProfileLanguage, onTheme, onContrast, onVoice, onApiKey, onReminder, onPermission, onDelete, onRefreshInstall, onResources, onSyncComplete }) {
     const [keyInput, setKeyInput] = useState(''), [scan, setScan] = useState(false), [phone, setPhone] = useState(''), [smsConsent, setSmsConsent] = useState(false), [activationError, setActivationError] = useState(''), [busy, setBusy] = useState(false), [online, setOnline] = useState(navigator.onLine);
+    const [syncMessage, setSyncMessage] = useState(''), [syncError, setSyncError] = useState(false);
     const [clinicKeys, setClinicKeys] = useState([]), [paypalConfig, setPaypalConfig] = useState(null), [paypalConfigError, setPaypalConfigError] = useState('');
     useEffect(() => { void getSetting('clinic-keys', []).then(setClinicKeys); const on = () => setOnline(navigator.onLine); window.addEventListener('online', on); window.addEventListener('offline', on); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', on); }; }, []);
     useEffect(() => {
@@ -354,24 +357,110 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
     const syncNow = async () => { if (!apiKey) {
         setActivationError(localText(dict, 'report_locked'));
         return;
-    } setBusy(true); try {
-        const queue = await (await db()).getAll('sync_queue');
+    } setBusy(true); setSyncMessage('Syncing saved sessions…'); setSyncError(false); try {
+        const database = await db();
+        const keyFingerprint = await cloudKeyFingerprint(apiKey);
+        const queue = await database.getAll('sync_queue');
+        let syncedCount = 0, reportCount = 0, resourceFailureCount = 0;
+        const attemptedSessionIds = new Set();
+        const saveResponse = async (response, sessionId, profileId) => {
+            if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                throw new Error(body.detail || `Session sync failed (${response.status}).`);
+            }
+            const data = await response.json();
+            const hasReport = hasReportContent(data.report);
+            if (hasReport) {
+                await setSetting(`report:${sessionId}`, data.report);
+                await setSetting('latest-cloud-report', data.report);
+                reportCount++;
+            }
+            for (const item of data.new_resources || []) {
+                try {
+                    await downloadResource(item, profileId);
+                }
+                catch (err) {
+                    console.error('Resource download failed after session sync.', err);
+                    resourceFailureCount++;
+                }
+            }
+            if (hasReport)
+                await setSetting(`cloud-synced:${keyFingerprint}:${sessionId}`, true);
+            attemptedSessionIds.add(sessionId);
+        };
         for (const row of queue.filter(item => !item.synced)) {
             const response = await fetch(`${API}/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey }, body: JSON.stringify(row.payload) });
-            if (response.ok) {
-                await (await db()).delete('sync_queue', row.id);
-                const data = await response.json();
-                if (data.report)
-                    await setSetting('latest-cloud-report', data.report);
-            }
-            else
-                throw new Error('A queued session could not be synced. Check the access key.');
+            const sessionId = row.payload.session_data?.at(-1)?.session_id;
+            await saveResponse(response, sessionId || row.id, row.payload.patient_id || profile.id);
+            await database.delete('sync_queue', row.id);
+            syncedCount++;
         }
-        setActivationError('');
-        onResources();
+
+        const allSessions = (await database.getAll('sessions'))
+            .filter(session => session.ended_at && (clinic || session.profile_id === profile.id))
+            .sort((a, b) => a.started_at.localeCompare(b.started_at));
+        const allPatients = clinic ? await database.getAll('patients') : [profile];
+        let skippedCount = 0;
+        for (const session of allSessions) {
+            if (attemptedSessionIds.has(session.id) || await getSetting(`cloud-synced:${keyFingerprint}:${session.id}`, false))
+                continue;
+            const sessionProfile = allPatients.find(item => item.id === session.profile_id);
+            if (!sessionProfile) {
+                throw new Error('A saved session has no matching local profile. No more sessions were synced.');
+            }
+            const rounds = (await database.getAllFromIndex('rounds', 'by-session', session.id))
+                .sort((a, b) => a.round_num - b.round_num);
+            if (!rounds.length) {
+                skippedCount++;
+                continue;
+            }
+            const payload = {
+                session_data: rounds.map(round => ({ ...round, session_id: session.id })),
+                profile: {
+                    group: clinic ? 'clinic' : 'child',
+                    age_years: sessionProfile.age_years,
+                    age_group: sessionProfile.age_group,
+                    condition: sessionProfile.condition,
+                    hand: sessionProfile.hand,
+                    language: sessionProfile.language,
+                    difficulty: session.difficulty_params || sessionProfile.difficulty,
+                    no_timer: sessionProfile.condition === 'parkinsons',
+                },
+                subscription_state: 'active',
+                usage_stats: {
+                    free_sessions_count: allSessions.length,
+                    difficulty_plateau: false,
+                    improvement_trend: 'unknown',
+                    has_therapist: clinic,
+                    therapist_requested_reports: false,
+                },
+                resource_preferences: {
+                    types: ['video', 'pdf', 'guide'],
+                    max_size_mb: 50,
+                    already_have: [],
+                },
+                patient_id: clinic ? sessionProfile.id : undefined,
+            };
+            const response = await fetch(`${API}/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey }, body: JSON.stringify(payload) });
+            await saveResponse(response, session.id, sessionProfile.id);
+            syncedCount++;
+        }
+        await onSyncComplete();
+        await onResources();
+        const message = syncedCount
+            ? reportCount === syncedCount
+                ? `${syncedCount} session${syncedCount === 1 ? '' : 's'} synced. Cloud reports are saved on this device.`
+                : `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded; ${syncedCount - reportCount} report${syncedCount - reportCount === 1 ? '' : 's'} could not be generated. Sync again to retry.`
+            : skippedCount
+                ? `No unsynced sessions found. ${skippedCount} completed session${skippedCount === 1 ? '' : 's'} had no saved round data.`
+                : 'No sessions needed syncing.';
+        setSyncMessage(resourceFailureCount
+            ? `${message} ${resourceFailureCount} resource download${resourceFailureCount === 1 ? '' : 's'} failed.`
+            : message);
     }
     catch (err) {
-        setActivationError(err instanceof Error ? err.message : 'Sync failed.');
+        setSyncError(true);
+        setSyncMessage(err instanceof Error ? err.message : 'Sync failed.');
     }
     finally {
         setBusy(false);
@@ -390,9 +479,19 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
     <article className="panel settings-section"><h2>{localText(dict, 'theme')}</h2><label>{localText(dict, 'theme')}<select value={theme} onChange={event => onTheme(event.target.value)}><option value="child">{localText(dict, 'theme_child')}</option><option value="clinical">{localText(dict, 'theme_clinical')}</option><option value="senior">{localText(dict, 'theme_senior')}</option></select></label><label className="switch-row"><span>{localText(dict, 'high_contrast')}</span><input type="checkbox" checked={highContrast} onChange={event => onContrast(event.target.checked)}/></label><label className="switch-row"><span>{localText(dict, 'voice')}</span><input type="checkbox" checked={voice} onChange={event => onVoice(event.target.checked)}/></label></article>
     <article className="panel settings-section"><h2>{localText(dict, 'activate_key')}</h2>{apiKey ? <p className="success-text">✓ {localText(dict, 'key_active')}</p> : <form className="key-form" onSubmit={activate}><label>{localText(dict, 'key_placeholder')}<input value={keyInput} onChange={event => setKeyInput(event.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 12))} minLength={12} maxLength={12} autoComplete="off"/></label><button className="button primary" disabled={busy || keyInput.length !== 12}>{busy ? localText(dict, 'continue') : localText(dict, 'activate')}</button><button type="button" className="button secondary" onClick={() => void scanQr()} disabled={busy}>{scan ? 'Scanning…' : 'Scan QR'}</button></form>}{clinicKeys.length > 1 && <details><summary>Clinic patient access keys</summary>{clinicKeys.map(item => <div key={item.label} className="key-row"><span>{item.label}</span><code>{item.api_key}</code></div>)}</details>}{activationError && <p className="error-text" role="alert">{activationError}</p>}</article>
     <article className="panel settings-section"><h2>{localText(dict, 'subscription')}</h2><p>{localText(dict, 'report_locked')}</p>{paypalConfig ? <p className={`notice payment-mode ${paypalConfig.mode === 'sandbox' ? 'sandbox' : 'live'}`}><strong>{paypalConfig.mode === 'sandbox' ? 'SANDBOX — test transactions only; no real charges.' : 'LIVE — real payments.'}</strong>{!paypalConfig.enabled && ' Payments are not configured on this server.'}</p> : <p className="notice" role={paypalConfigError ? 'alert' : undefined}>{paypalConfigError || 'Checking payment environment…'}</p>}<label>{localText(dict, 'child_name')}<input value={phone} onChange={event => setPhone(event.target.value)} inputMode="tel" placeholder="+254…"/></label><label className="consent-check"><input type="checkbox" checked={smsConsent} onChange={event => setSmsConsent(event.target.checked)}/>{localText(dict, 'sms_optin')}</label><div className="plan-buttons"><button className="button secondary" disabled={busy || !online} onClick={() => void subscribe('individual')}>{localText(dict, 'individual_plan')}</button><button className="button primary" disabled={busy || !online} onClick={() => void subscribe('clinic')}>{localText(dict, 'clinic_plan')}</button></div>{!online && <p className="muted">Payment requires an internet connection.</p>}</article>
-    <article className="panel settings-section"><h2>{localText(dict, 'sync')}</h2><label>{localText(dict, 'queue')}<input type="time" value={reminderTime} onChange={event => onReminder(event.target.value)}/></label><button className="button secondary" onClick={() => void enableNotify()}>{notifyPermission === 'granted' ? 'Notifications enabled' : 'Enable daily reminders'}</button><p className="muted">Daily reminders can appear while this app is open. Push reminders require an active cloud account.</p><button className="button primary" disabled={busy || !online || !apiKey} onClick={() => void syncNow()}>{localText(dict, 'sync')}</button><div className="settings-inline"><button className="text-link" onClick={() => void exportData()}>{localText(dict, 'export')}</button><button className="text-link" onClick={() => window.print()}>{localText(dict, 'print')}</button></div>{apiKey && <button className="text-link danger-link" onClick={() => void deleteCloud()}>{localText(dict, 'delete_data')}</button>}</article>
+    <article className="panel settings-section"><h2>{localText(dict, 'sync')}</h2><label>{localText(dict, 'queue')}<input type="time" value={reminderTime} onChange={event => onReminder(event.target.value)}/></label><button className="button secondary" onClick={() => void enableNotify()}>{notifyPermission === 'granted' ? 'Notifications enabled' : 'Enable daily reminders'}</button><p className="muted">Daily reminders can appear while this app is open. Push reminders require an active cloud account.</p><p className="muted">Sync uploads completed local sessions and saved profile details to generate subscriber reports and find available resources.</p><button className="button primary" disabled={busy || !online || !apiKey} onClick={() => void syncNow()}>{busy ? 'Syncing…' : localText(dict, 'sync')}</button>{syncMessage && <p className={syncError ? 'error-text' : 'success-text'} role={syncError ? 'alert' : 'status'}>{syncMessage}</p>}<div className="settings-inline"><button className="text-link" onClick={() => void exportData()}>{localText(dict, 'export')}</button><button className="text-link" onClick={() => window.print()}>{localText(dict, 'print')}</button></div>{apiKey && <button className="text-link danger-link" onClick={() => void deleteCloud()}>{localText(dict, 'delete_data')}</button>}</article>
     <article className="panel settings-section"><h2>DexPlay</h2><p>{localText(dict, 'offline')}</p><button className="button secondary" onClick={() => void install()} disabled={!installPrompt}>{installPrompt ? 'Install app' : 'Already installed or install unavailable'}</button><button className="text-link danger-link" onClick={() => void onDelete()}>{localText(dict, 'delete_data')} · this device</button></article>
   </section>;
+}
+async function cloudKeyFingerprint(apiKey) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(apiKey));
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+function hasReportContent(report) {
+    return Boolean(report && ['parent', 'therapist', 'patient'].some(audience => report[audience]?.report_text));
+}
+async function cloudSyncMarker(sessionId, apiKey) {
+    return `cloud-synced:${await cloudKeyFingerprint(apiKey)}:${sessionId}`;
 }
 function languageLocale(lang) { return { en: 'en-US', es: 'es-ES', hi: 'hi-IN', zh: 'zh-CN', ar: 'ar', sw: 'sw-KE', pt: 'pt-BR', fr: 'fr-FR', bn: 'bn-BD', tl: 'fil-PH' }[lang] ?? 'en-US'; }
 async function downloadResource(item, profileMatch) {
