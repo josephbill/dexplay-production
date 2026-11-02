@@ -1,66 +1,59 @@
-# Render PayPal sandbox demo setup
+# PayPal sandbox demo on Render
 
-The Render Blueprint defines two separate payment environments:
+The existing Render deployment is the **sandbox demo**:
 
-- **Production:** `https://dexplay-web.onrender.com` → `https://dexplay-api.onrender.com`, using `APP_ENV=production` and `PAYPAL_MODE=live`.
-- **Sandbox demo:** `https://dexplay-web-sandbox.onrender.com` → `https://dexplay-api-sandbox.onrender.com`, using `APP_ENV=staging` and `PAYPAL_MODE=sandbox`.
+- PWA: `https://dexplay-web.onrender.com`
+- API: `https://dexplay-api.onrender.com`
+- Webhook: `https://dexplay-api.onrender.com/paypal/webhook`
 
-The sandbox API has its own database and Redis service. Its device keys and demo records are not production credentials or data. The browser does not choose the PayPal mode; the API selects it from its server environment. Production rejects sandbox mode.
+It uses the existing Render database and Redis. No second web/API/database stack is needed. The API mode is chosen by its server environment; there is no mode switch in the browser. The Render Blueprint sets `APP_ENV=staging` and `PAYPAL_MODE=sandbox`.
 
-## 1. Provision the sandbox services
+## Configure the existing API service
 
-1. Push the repository changes to the Git branch connected to Render.
-2. In Render, sync the existing Blueprint with `render.yaml` and approve creation of `dexplay-web-sandbox`, `dexplay-api-sandbox`, `dexplay-sandbox-db`, and `dexplay-redis-sandbox`.
-3. Keep the existing `dexplay-api` settings unchanged: `APP_ENV=production` and `PAYPAL_MODE=live`.
-4. Wait for the sandbox web and API services to deploy. The sandbox API health check should pass at `https://dexplay-api-sandbox.onrender.com/health/ready`.
+1. In Render, open the existing `dexplay-api` service and its **Environment** settings.
+2. Set `APP_ENV` to `staging` and `PAYPAL_MODE` to `sandbox`.
+3. Configure all five sandbox variables:
 
-Render may ask for values marked `sync: false` during Blueprint sync. Enter them in Render's protected environment-variable fields, not in this file or source control.
+   | Variable | Value |
+   |---|---|
+   | `PAYPAL_SANDBOX_CLIENT_ID` | Client ID for your PayPal sandbox REST app |
+   | `PAYPAL_SANDBOX_CLIENT_SECRET` | Secret for that sandbox app |
+   | `PAYPAL_SANDBOX_WEBHOOK_ID` | ID of the sandbox webhook registered to the API URL above |
+   | `PAYPAL_SANDBOX_INDIVIDUAL_PLAN_ID` | Sandbox monthly Individual plan ID ($9.99/month) |
+   | `PAYPAL_SANDBOX_CLINIC_PLAN_ID` | Sandbox monthly Clinic plan ID ($49/month) |
 
-## 2. Create PayPal sandbox credentials and plans
+4. Save the environment and redeploy/restart the API service.
+5. Check `https://dexplay-api.onrender.com/paypal/config`. It should return `{"mode":"sandbox","enabled":true}`. If `enabled` is false, at least one of the five sandbox values is missing.
 
-1. In the PayPal Developer Dashboard, use the **Sandbox** environment.
-2. Create a sandbox REST app and use its client ID and secret.
-3. Create two monthly subscription plans matching the prices shown in DexPlay: individual at **$9.99/month** and clinic at **$49/month**. Copy their sandbox plan IDs.
-4. Create a webhook for the sandbox API URL:
-   `https://dexplay-api-sandbox.onrender.com/paypal/webhook`
-5. Subscribe it to these events:
+The API requires both plan IDs even if you are testing only one plan, so configure both. Keep the two actual live plan IDs and live PayPal credentials out of these sandbox variables.
+
+## Set up the PayPal sandbox resources
+
+1. In the PayPal Developer Dashboard, select the **Sandbox** environment.
+2. Create or select a sandbox REST app. Copy its client ID and secret to the Render API variables above.
+3. Create a monthly subscription product and two active plans, one for **$9.99/month** and one for **$49/month**. Copy their plan IDs to the corresponding Render variables.
+4. In the same sandbox REST app, create a webhook with URL:
+   `https://dexplay-api.onrender.com/paypal/webhook`
+5. Subscribe it to:
    - `BILLING.SUBSCRIPTION.ACTIVATED`
    - `BILLING.SUBSCRIPTION.CANCELLED`
    - `BILLING.SUBSCRIPTION.EXPIRED`
    - `BILLING.SUBSCRIPTION.SUSPENDED`
    - `BILLING.SUBSCRIPTION.PAYMENT.FAILED`
-6. Copy the sandbox webhook ID.
+6. Copy the webhook's **Webhook ID** (not an event ID) to `PAYPAL_SANDBOX_WEBHOOK_ID`.
 
-## 3. Configure the sandbox API service
+## Run a demo subscription
 
-In the `dexplay-api-sandbox` Render service, set:
+1. Open `https://dexplay-web.onrender.com`, then go to **Settings → Plans**. Confirm that it says **SANDBOX — test transactions only; no real charges**.
+2. Leave SMS consent unchecked; SMS is not configured in the free Render setup.
+3. Select an Individual or Clinic plan. Approve checkout using a PayPal **sandbox buyer account** from the Developer Dashboard, never a real buyer account.
+4. PayPal sends the activation webhook to Render. DexPlay then creates and saves the device key on the browser that started checkout. Individual plans issue one key; Clinic plans issue patient-device keys.
 
-| Environment variable | Value |
-|---|---|
-| `APP_ENV` | `staging` |
-| `PAYPAL_MODE` | `sandbox` |
-| `PAYPAL_SANDBOX_CLIENT_ID` | Sandbox REST app client ID |
-| `PAYPAL_SANDBOX_CLIENT_SECRET` | Sandbox REST app secret |
-| `PAYPAL_SANDBOX_WEBHOOK_ID` | Sandbox webhook ID |
-| `PAYPAL_SANDBOX_INDIVIDUAL_PLAN_ID` | Sandbox $9.99/month plan ID |
-| `PAYPAL_SANDBOX_CLINIC_PLAN_ID` | Sandbox $49/month plan ID |
+If the UI says sandbox payments are not configured, check that all five values are present on the `dexplay-api` service, then redeploy. If checkout succeeds but key activation stays pending, inspect the PayPal sandbox webhook delivery and Render API logs.
 
-The Blueprint supplies the sandbox service's public origin, allowed web origin, isolated database and Redis URLs, encryption key, and API-key pepper. It also requires `OPENAI_API_KEY` for API startup. Save the changes and redeploy the sandbox API.
+## Safety and data
 
-Leave `PAYPAL_MODE=live` and the existing live PayPal credentials/plans on the production API. Never copy sandbox credentials, webhook IDs, plan IDs, or generated device keys into the production service.
-
-## 4. Run a sandbox purchase
-
-1. Open `https://dexplay-web-sandbox.onrender.com` and choose **Settings → Plans**. It should show **SANDBOX — test transactions only; no real charges**.
-2. Keep the SMS-consent option unchecked; SMS is not configured on this free Blueprint.
-3. Select an individual or clinic plan. PayPal should show the sandbox checkout.
-4. Approve with a PayPal sandbox buyer account from the Developer Dashboard, not a real PayPal account.
-5. After PayPal sends the activation webhook, DexPlay claims the activation and saves the issued device key on that browser. Individual plans issue one device key; clinic plans issue multiple patient-device keys.
-
-If the UI reports that sandbox payments are not configured, check that all five `PAYPAL_SANDBOX_*` values are set on `dexplay-api-sandbox` and that the service restarted. If checkout returns but activation remains pending, check the sandbox webhook URL, selected event types, webhook ID, and API logs.
-
-## Notes
-
-- Changing server environment variables requires a sandbox API redeploy/restart; there is no client-side switch.
-- Render's free API may sleep, free Postgres expires after 30 days, and free Redis is volatile. This setup is for synthetic demo data only, not patient data.
-- The production application and PayPal mode are not changed by sandbox testing.
+- Do not set `PAYPAL_MODE=live` or enter live credentials on this demo deployment.
+- The server rejects `PAYPAL_MODE=sandbox` when `APP_ENV=production`.
+- Render's free Postgres expires after 30 days and free Redis is volatile. Use synthetic demo data only, not patient data.
+- For a separate real production deployment, use its own API and database, set `APP_ENV=production` and `PAYPAL_MODE=live`, and configure only live PayPal credentials/plans/webhook. Do not mix sandbox device keys or accounts into it.
