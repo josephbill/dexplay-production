@@ -362,6 +362,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         const keyFingerprint = await cloudKeyFingerprint(apiKey);
         const queue = await database.getAll('sync_queue');
         let syncedCount = 0, reportCount = 0, resourceFailureCount = 0;
+        const reportFailures = new Set();
         const attemptedSessionIds = new Set();
         const saveResponse = async (response, sessionId, profileId) => {
             if (!response.ok) {
@@ -369,11 +370,25 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                 throw new Error(body.detail || `Session sync failed (${response.status}).`);
             }
             const data = await response.json();
-            const hasReport = hasReportContent(data.report);
+            const expectedAudiences = ['parent', 'therapist', 'patient'];
+            const generatedAudiences = expectedAudiences
+                .filter(audience => data.report?.[audience]?.report_text);
+            const hasReport = generatedAudiences.length > 0;
+            const completeReport = generatedAudiences.length === expectedAudiences.length;
             if (hasReport) {
                 await setSetting(`report:${sessionId}`, data.report);
                 await setSetting('latest-cloud-report', data.report);
+            }
+            if (completeReport) {
                 reportCount++;
+            } else {
+                const unavailable = (data.agents_unavailable || [])
+                    .filter(agent => agent === 'adaptive' || agent === 'reports' || agent.startsWith('report_'));
+                const missingAudiences = expectedAudiences
+                    .filter(audience => !generatedAudiences.includes(audience))
+                    .map(audience => `report_${audience}`);
+                for (const agent of new Set([...unavailable, ...missingAudiences]))
+                    reportFailures.add(agent);
             }
             for (const item of data.new_resources || []) {
                 try {
@@ -384,7 +399,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                     resourceFailureCount++;
                 }
             }
-            if (hasReport)
+            if (completeReport)
                 await setSetting(`cloud-synced:${keyFingerprint}:${sessionId}`, true);
             attemptedSessionIds.add(sessionId);
         };
@@ -450,7 +465,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         const message = syncedCount
             ? reportCount === syncedCount
                 ? `${syncedCount} session${syncedCount === 1 ? '' : 's'} synced. Cloud reports are saved on this device.`
-                : `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded; ${syncedCount - reportCount} report${syncedCount - reportCount === 1 ? '' : 's'} could not be generated. Sync again to retry.`
+                : `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded; ${syncedCount - reportCount} report${syncedCount - reportCount === 1 ? '' : 's'} could not be generated${reportFailures.size ? ` (${[...reportFailures].join(', ')} unavailable)` : ''}. Sync retries generation; if this persists, the cloud report service needs attention.`
             : skippedCount
                 ? `No unsynced sessions found. ${skippedCount} completed session${skippedCount === 1 ? '' : 's'} had no saved round data.`
                 : 'No sessions needed syncing.';

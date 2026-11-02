@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 from .agents import adaptive, payment, resource
+from .agents.report import generate_report
 from .db import SessionLocal
 
 def _fallback(profile: dict, session_data: list[dict]) -> dict:
@@ -22,7 +23,8 @@ async def orchestrate(*, session_data: list[dict], profile: dict, subscription_s
                       usage_stats: dict, resource_preferences: dict, progress_summary: dict,
                       therapist_requested_reports: bool = False) -> dict:
     tasks = [
-        asyncio.create_task(_run_one("adaptive", adaptive.run(session_data, profile))),
+        asyncio.create_task(_run_one("adaptive", adaptive.run(session_data, profile, report_audiences=()))),
+        asyncio.create_task(_run_one("reports", _run_reports(session_data, profile))),
         asyncio.create_task(_run_one("payment", payment.run(usage_stats=usage_stats,
             progress_summary={**progress_summary, "session_data": session_data},
             subscription_state=subscription_state, profile=profile,
@@ -35,7 +37,7 @@ async def orchestrate(*, session_data: list[dict], profile: dict, subscription_s
         task.cancel()
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
-    results = {"adaptive": None, "payment": None, "resource": None}
+    results = {"adaptive": None, "reports": None, "payment": None, "resource": None}
     unavailable = []
     for task in done:
         name, value, err = task.result()
@@ -44,12 +46,17 @@ async def orchestrate(*, session_data: list[dict], profile: dict, subscription_s
         else:
             results[name] = value
     adaptive_result = results["adaptive"] or _fallback(profile, session_data)
+    if results["reports"]:
+        reports, report_errors = results["reports"]
+        unavailable.extend(report_errors)
+    else:
+        reports = {}
     payment_result = results["payment"] or {"recommend": False, "message": "", "urgency": "low",
         "best_time": "weekly", "reason": "Payment agent unavailable", "paypal_action": "none"}
     resource_result = results["resource"] or {"new_resources": [], "total_size_mb": 0,
         "gaps": ["Resource service unavailable"], "language_fallback": False}
     return {"next_difficulty": adaptive_result["next_difficulty"],
-        "report": adaptive_result.get("report", {}), "flag": adaptive_result.get("flag"),
+        "report": reports, "flag": adaptive_result.get("flag"),
         "improvement_trend": adaptive_result.get("improvement_trend"),
         "subscription_recommendation": payment_result, "paypal_action": payment_result.get("paypal_action", "none"),
         "new_resources": resource_result["new_resources"], "resource_total_mb": resource_result["total_size_mb"],
@@ -60,3 +67,25 @@ async def _run_resource(profile, preferences, context):
     async with SessionLocal() as db:
         return await _run_one("resource", resource.run(profile=profile,
             resource_preferences=preferences, db=db, current_session_context=context))
+
+async def _run_reports(session_data: list[dict], profile: dict):
+    language = profile.get("language", "en")
+    audiences = ("parent", "therapist", "patient")
+    results = await asyncio.gather(*[
+        _run_one(f"report_{audience}", generate_report(
+            session_data=session_data,
+            profile=profile,
+            audience=audience,
+            period="session",
+            language=language,
+        ))
+        for audience in audiences
+    ])
+    reports = {}
+    unavailable = []
+    for name, value, error in results:
+        if error:
+            unavailable.append(name)
+        else:
+            reports[name.removeprefix("report_")] = value
+    return reports, unavailable
