@@ -10,18 +10,20 @@ This comparison describes behavior implemented in the current codebase. A subscr
 | See local progress, scores, and recent sessions | Available | Available |
 | Export local data and print the on-device report view | Available | Available |
 | Sync session measurements to DexPlay's cloud API | Not available; sessions remain on this device | Available when online and the API is healthy |
-| Generate cloud coaching and written reports | Not available | Requested during cloud sync; availability depends on the cloud/LLM service |
-| Download recommended curated resources | Not available through cloud sync | Possible when matching, approved resources exist in the catalog |
+| Get a post-game agent report | Brief score and encouragement; pseudonymous round metrics are analyzed but not stored in cloud session history | Detailed parent, therapist, and patient reports after authenticated cloud sync |
+| Receive adaptive next-session difficulty | Agent may return an updated difficulty based on this game and the limited accuracy history provided | Agent may return an updated difficulty based on the submitted session and available history |
+| Find and download curated resources | Not run; resource mining is excluded from free analysis | Possible when matching, approved resources exist in the catalog |
 | Use the cloud account endpoints (cloud export/delete and sync) | Not available | Available for an active key |
 | Number of keys issued by plan | None | Individual: one device key; Clinic: up to 50 patient-device keys |
 
 ## Important distinctions
 
 - **A subscription is not needed to use the core game.** Camera practice and local session history are available without cloud access.
-- The Reports screen can show local scores and session history without a subscription. The written parent, therapist, and patient reports are generated as part of the cloud-sync response, not by the local-only flow.
+- After a free session, the app may send pseudonymous game measurements plus a limited language/age-band/difficulty profile to the analysis API for a brief agent report. It does not send the user's name, profile ID, diagnosis, hand preference, or camera video through this free-analysis request. Free analysis is not stored as a cloud session; local game history stays on the device.
+- The Reports screen can show local scores and session history without a subscription. Detailed parent, therapist, and patient reports are generated as part of authenticated cloud sync.
 - Resources are not guaranteed by subscribing. The project starts with an empty curated-resource catalog, so recommendations/downloads may return no matching items until reviewed resources are added.
 - The clinic patient roster in the PWA is stored locally. The API also has a protected clinic-dashboard endpoint, but the current PWA does not call that endpoint; do not treat a remotely synchronized clinic dashboard as a current UI feature.
-- Cloud sync and reports require a reachable, configured API and its dependencies. An active key alone cannot make an unavailable cloud or LLM service work.
+- Free brief analysis requires a reachable API, Redis-based rate limiting, and the LLM service. If analysis is unavailable, the app shows a short on-device score summary. Detailed subscriber reports and resources require authenticated cloud sync.
 - Video remains on the device. The cloud sync payload contains session/profile measurements, not camera video.
 - In the current Render sandbox demo, PayPal approval and device-key issuance are for testing only; they do not represent a production subscription or real charge.
 

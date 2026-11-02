@@ -1,10 +1,12 @@
 from __future__ import annotations
-import asyncio, logging, secrets, uuid
+import asyncio, hashlib, hmac, logging, secrets, uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from phonenumbers import NumberParseException
 import phonenumbers
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from .agents import adaptive
@@ -13,7 +15,7 @@ from .db import SessionLocal, get_db
 from .models import Account, ActivationClaim, CuratedResource, DeviceKey, SessionRecord, WebhookEvent
 from .models.entities import new_key
 from .orchestrator import orchestrate
-from .schemas import ClaimRequest, KeyActivationRequest, SubscriptionRequest, SyncRequest
+from .schemas import ClaimRequest, FreeAnalysisRequest, KeyActivationRequest, SubscriptionRequest, SyncRequest
 from .security import decrypt_payload, encrypt_payload, generate_api_key, hash_api_key, hash_claim
 from .services.paypal import PayPalClient
 
@@ -32,7 +34,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(self), microphone=()"
-    response.headers["Cache-Control"] = "no-store" if request.url.path.startswith(("/sync", "/paypal", "/privacy")) else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if request.url.path.startswith(("/sync", "/analysis", "/paypal", "/privacy")) else "no-cache"
     return response
 
 async def authenticated_device(x_device_key: str | None = Header(default=None), db: AsyncSession = Depends(get_db)):
@@ -99,6 +101,55 @@ async def sync(body: SyncRequest, auth=Depends(authenticated_device), db: AsyncS
             "condition": body.profile.get("condition")},
         therapist_requested_reports=bool(body.usage_stats.get("therapist_requested_reports", False)))
     return result
+
+async def enforce_free_analysis_limit(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    fingerprint = hmac.new(
+        settings.api_key_pepper.encode(),
+        client_ip.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        key = f"dexplay:free-analysis:{fingerprint}"
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 3600)
+    except RedisError as exc:
+        log.error("Free analysis rate limit unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "Free session analysis is temporarily unavailable.") from exc
+    finally:
+        await redis.aclose()
+    if count > 60:
+        raise HTTPException(429, "Free session analysis limit reached. Try again later.")
+
+@app.post("/analysis/free")
+async def analyze_free_session(body: FreeAnalysisRequest, request: Request):
+    await enforce_free_analysis_limit(request)
+    session_data = [item.model_dump() for item in body.session_data]
+    profile = body.profile.model_dump()
+    try:
+        result = await adaptive.run(
+            session_data,
+            profile,
+            report_audiences=("patient",),
+            brief_report=True,
+        )
+    except Exception as exc:
+        log.error("Free session analysis failed: %s", type(exc).__name__)
+        raise HTTPException(503, "Session analysis is temporarily unavailable; local game results are saved.") from exc
+    return {
+        "report": result.get("report", {}),
+        "next_difficulty": result["next_difficulty"],
+        "performance": {
+            "rounds": len(session_data),
+            "objects_placed": sum(item["objects_placed"] for item in session_data),
+            "objects_total": sum(item["objects_total"] for item in session_data),
+            "accuracy": round(sum(item["accuracy"] for item in session_data) / len(session_data), 3),
+        },
+        "new_resources": [],
+        "resource_gaps": [],
+    }
 
 @app.get("/paypal/config")
 async def paypal_config():

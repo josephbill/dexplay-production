@@ -13,7 +13,9 @@ PLAN_TOOL = {"type":"object","properties":{
  "flag":{"type":["object","null"],"properties":{"severity":{"type":"string","enum":["low","medium","high"]},"note":{"type":"string","maxLength":500},"recommendation":{"type":"string","maxLength":500}},"required":["severity","note","recommendation"],"additionalProperties":False}
 },"required":["object_size_mm","time_limit_s","objects_count","zone_size_mm","speed_factor","reason","flag"],"additionalProperties":False}
 
-async def run(session_data: list[dict], profile: dict) -> dict:
+async def run(session_data: list[dict], profile: dict, *,
+              report_audiences: tuple[str, ...] = ("parent", "therapist", "patient"),
+              brief_report: bool = False) -> dict:
     language = profile.get("language", "en")
     is_child = profile.get("group", "child") == "child"
     latest_sessions = profile.get("recent_session_accuracy", [])[-3:]
@@ -44,13 +46,14 @@ async def run(session_data: list[dict], profile: dict) -> dict:
              "recent_session_accuracy": latest_sessions}, tool_name="plan_dexterity_session",
              description="Choose validated next-session difficulty and any evidence-based safety concern.",
              parameters=PLAN_TOOL, handler=apply)
-    if session_data:
+    if session_data and report_audiences:
         reports = await __import__("asyncio").gather(*[
             generate_report(session_data=session_data, profile=profile, audience=audience,
-                            period="session", language=language)
-            for audience in ("parent", "therapist", "patient")
+                            period="session", language=language,
+                            context="brief" if brief_report else "progress")
+            for audience in report_audiences
         ])
-        result["report"] = dict(zip(("parent", "therapist", "patient"), reports))
+        result["report"] = dict(zip(report_audiences, reports))
     else:
-        result["report"] = {"parent": None, "therapist": None, "patient": None}
+        result["report"] = {audience: None for audience in report_audiences}
     return result

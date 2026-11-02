@@ -19,6 +19,8 @@ async def generate_report(*, session_data: list[dict], profile: dict, audience: 
               "parent warm and simple, therapist concise and clinical, patient encouraging. Never diagnose, "
               "invent measurements, guarantee recovery, or call a child a failure. For Parkinson's, emphasize "
               "stability and comfort, never speed. Return your report by calling the required tool.")
+    if context == "brief":
+        system += " Keep this free-user report to one or two short sentences: state the measured session result and add brief encouragement. Do not include treatment advice or recommendations."
     def deliver(args: dict) -> dict:
         if not args["report_text"].strip() or len(args["report_text"]) > 5000:
             raise ValueError("Report text is empty or too long")

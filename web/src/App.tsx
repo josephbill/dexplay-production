@@ -138,6 +138,8 @@ export default function App() {
     const finishGame = async (session, _rounds, result) => {
         setCloudReport(null);
         if (result) {
+            if (result.analysis_unavailable)
+                setNotice('Cloud analysis is temporarily unavailable. Showing a brief summary from your on-device results.');
             const reports = result.report;
             if (reports) {
                 setCloudReport(reports);

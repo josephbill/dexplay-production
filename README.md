@@ -9,7 +9,7 @@ Production PWA and cloud services live here. The existing `../dexplay-mvp` remai
 3. For a private cloud deployment, copy the root `.env.example` to `.env` and `api/.env.example` to `api/.env`; set real credentials, then run `docker compose up --build`. The web service listens on port 8080. Put an HTTPS reverse proxy in front before enabling camera or payments.
 4. For API-only development, configure `api/.env`, install `requirements.txt`, run Alembic migrations, then start `uvicorn app.main:app --reload`.
 
-The free child and clinic flows run locally after the PWA shell has been installed. Gameplay never makes network requests and video is processed in the browser. The cloud `/sync` path is only used after a device key is activated. Cloud startup is deliberately fail-closed: live LLM, database, encryption, PayPal and Twilio settings are validated when their services are enabled. No PayPal credentials, demo API keys, fake resources, or simulated payment success are shipped.
+The free child and clinic game flows run locally after the PWA shell has been installed, and video is processed in the browser. After a game, free users can send pseudonymous round metrics to `/analysis/free` for a brief agent report; this endpoint does not persist cloud session history or mine resources and is rate-limited through Redis. Full reports and curated-resource lookup remain behind the authenticated cloud `/sync` path. Cloud startup is deliberately fail-closed: live LLM, database, encryption, PayPal and Twilio settings are validated when their services are enabled. No PayPal credentials, demo API keys, fake resources, or simulated payment success are shipped.
 
 ## Structure
 

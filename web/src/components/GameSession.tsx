@@ -4,6 +4,7 @@ import { CameraCoach } from '../cv/CameraCoach';
 import { queueSync, saveSession } from '../db';
 import { t } from '../i18n';
 
+const API = import.meta.env.VITE_API_URL || '/api';
 const colors = ['red', 'blue', 'green', 'yellow'];
 const CORNER_NAMES = ['top_left', 'top_right', 'bottom_right', 'bottom_left'];
 
@@ -254,6 +255,25 @@ export function GameSession({
     const finishedSession = { ...session, ended_at: endedAt };
     try {
       await saveSession(finishedSession, next);
+      const previousAccuracy = await recentSessionAccuracies(profile.id, session.id);
+      const analysisProfile = {
+        group: clinic ? 'clinic' : 'child',
+        age_group: profile.age_group,
+        language: profile.language,
+        difficulty: profile.difficulty,
+        recent_session_accuracy: previousAccuracy,
+      };
+      const reportPayload = next.map(
+        ({ round_num, mode, objects_placed, objects_total, avg_time, fumbles, accuracy }) => ({
+          round_num,
+          mode,
+          objects_placed,
+          objects_total,
+          avg_time,
+          fumbles,
+          accuracy,
+        })
+      );
       const payload = {
         session_data: next.map((item) => ({ ...item, session_id: session.id })),
         profile: {
@@ -265,6 +285,7 @@ export function GameSession({
           language: profile.language,
           difficulty: profile.difficulty,
           no_timer: profile.condition === 'parkinsons',
+          recent_session_accuracy: previousAccuracy,
         },
         subscription_state: 'active',
         usage_stats: {
@@ -294,7 +315,19 @@ export function GameSession({
           await queueSync(payload);
           onFinished(finishedSession, next);
         }
-      } else onFinished(finishedSession, next);
+      } else if (navigator.onLine) {
+        try {
+          const result = await analyzeFreeSession({
+            session_data: reportPayload,
+            profile: analysisProfile,
+          });
+          onFinished(finishedSession, next, result);
+        } catch {
+          onFinished(finishedSession, next, localBriefReport(reportPayload, profile.language));
+        }
+      } else {
+        onFinished(finishedSession, next, localBriefReport(reportPayload, profile.language));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save this session.');
       setSaving(false);
@@ -505,8 +538,62 @@ async function countLocalSessions(profileId) {
   return (await recentSessions(profileId, 1000)).length + 1;
 }
 
+async function recentSessionAccuracies(profileId, currentSessionId) {
+  const { db, recentSessions } = await import('../db');
+  const database = await db();
+  const previous = (await recentSessions(profileId, 1000))
+    .filter((item) => item.id !== currentSessionId)
+    .slice(0, 3);
+  const accuracies = [];
+  for (const item of previous) {
+    const rounds = await database.getAllFromIndex('rounds', 'by-session', item.id);
+    if (rounds.length) {
+      accuracies.push(
+        rounds.reduce((sum, round) => sum + round.accuracy, 0) / rounds.length
+      );
+    }
+  }
+  return accuracies;
+}
+
+async function analyzeFreeSession(payload) {
+  const response = await fetch(`${API}/analysis/free`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error('Free session analysis is unavailable.');
+  }
+  return response.json();
+}
+
+function localBriefReport(rounds, language) {
+  const placed = rounds.reduce((sum, round) => sum + round.objects_placed, 0);
+  const total = rounds.reduce((sum, round) => sum + round.objects_total, 0);
+  return {
+    report: {
+      patient: {
+        report_text: `You placed ${placed} of ${total} pieces. Great work—keep practicing!`,
+        summary: `You placed ${placed} of ${total} pieces.`,
+        audience: 'patient',
+        language,
+      },
+    },
+    performance: {
+      rounds: rounds.length,
+      objects_placed: placed,
+      objects_total: total,
+      accuracy: rounds.reduce((sum, round) => sum + round.accuracy, 0) / rounds.length,
+    },
+    new_resources: [],
+    resource_gaps: [],
+    analysis_unavailable: true,
+  };
+}
+
 async function sendSync(payload, apiKey) {
-  const response = await fetch('/api/sync', {
+  const response = await fetch(`${API}/sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey },
     body: JSON.stringify(payload),
