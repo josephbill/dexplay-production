@@ -1,0 +1,96 @@
+:root {
+  --dex-surface: #fff;
+  --dex-border: #e6eaf0;
+  --dex-ink: #25334a;
+  --dex-muted: #677386;
+  --dex-accent: #3569a8;
+}
+
+.content-area {
+  background:
+    radial-gradient(ellipse at 80% 0, #eef4fc70, transparent 34%),
+    #fffaf3;
+}
+
+.page-heading {
+  margin-bottom: 28px;
+}
+
+.page-heading h1 {
+  letter-spacing: -0.035em;
+}
+
+.panel,
+.game-card,
+.mode-picker,
+.patient-table,
+.resource-card,
+.home-card {
+  border-color: var(--dex-border);
+  border-radius: 20px;
+  box-shadow: 0 10px 28px #263e5c0a;
+}
+
+.stat-card {
+  border: 1px solid var(--dex-border);
+  border-radius: 17px;
+  box-shadow: 0 8px 20px #263e5c08;
+}
+
+.button {
+  min-height: 44px;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.button.primary:hover:not(:disabled),
+.button.secondary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px #263e5c14;
+}
+
+.settings-page,
+.home-page,
+.clinic-page,
+.resource-grid {
+  gap: 18px;
+}
+
+.welcome-banner {
+  overflow: hidden;
+  border: 1px solid #e7ebf1;
+  border-radius: 24px;
+  box-shadow: 0 14px 34px #263e5c0b;
+}
+
+.settings-section,
+.resource-card {
+  gap: 16px;
+}
+
+.side-nav button.active,
+.side-nav button:hover,
+.mat-link:hover {
+  box-shadow: inset 3px 0 #e7a84c;
+}
+
+.patient-table {
+  overflow-x: auto;
+}
+
+.patient-row {
+  border-color: #edf0f4;
+  transition: background-color 150ms ease;
+}
+
+.patient-row:hover:not(.table-head) {
+  background: #f5f8fc;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

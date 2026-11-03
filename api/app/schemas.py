@@ -54,6 +54,22 @@ class SyncRequest(BaseModel):
     patient_id: str | None = Field(default=None, max_length=80)
     ai_consent: bool = False
 
+class ReportTranslationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audience: Literal["parent", "therapist", "patient"]
+    report_text: str = Field(min_length=1, max_length=5000)
+    source_language: str = Field(min_length=2, max_length=8)
+    target_language: Literal["en", "es", "hi", "zh", "ar", "sw", "pt", "fr", "bn", "tl"]
+    ai_consent: Literal[True]
+
+    @field_validator("report_text")
+    @classmethod
+    def non_blank_report_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Report text must not be blank")
+        return value
+
 class CandidateReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

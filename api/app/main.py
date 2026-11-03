@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from .agents import adaptive
+from .agents.report_translation import translate_report_text
 from .config import get_settings
 from .db import SessionLocal, get_db
 from .models import (
@@ -33,6 +34,7 @@ from .schemas import (
     ClaimRequest,
     FreeAnalysisRequest,
     KeyActivationRequest,
+    ReportTranslationRequest,
     SubscriptionRequest,
     SyncRequest,
 )
@@ -253,6 +255,37 @@ async def enforce_free_analysis_limit(request: Request):
         await redis.aclose()
     if count > 60:
         raise HTTPException(429, "Free session analysis limit reached. Try again later.")
+
+@app.post("/reports/translate")
+async def translate_report(
+    request: Request,
+    body: ReportTranslationRequest,
+    auth=Depends(authenticated_device),
+):
+    request_id = request.state.request_id
+    log.info(
+        "report.translation_started request_id=%s audience=%s source_language=%s target_language=%s",
+        request_id,
+        body.audience,
+        body.source_language,
+        body.target_language,
+    )
+    try:
+        translated_text = await translate_report_text(
+            report_text=body.report_text,
+            audience=body.audience,
+            source_language=body.source_language,
+            target_language=body.target_language,
+        )
+    except Exception as exc:
+        log.error(
+            "report.translation_failed request_id=%s audience=%s error_type=%s",
+            request_id,
+            body.audience,
+            type(exc).__name__,
+        )
+        raise HTTPException(503, "Report translation is temporarily unavailable.") from exc
+    return {"translated_text": translated_text, "language": body.target_language}
 
 @app.post("/analysis/free")
 async def analyze_free_session(body: FreeAnalysisRequest, request: Request):
