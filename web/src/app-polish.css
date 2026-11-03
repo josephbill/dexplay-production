@@ -114,7 +114,7 @@
 }
 
 .review-credential-field input,
-.review-candidate input,
+.review-candidate input:not([type="checkbox"]),
 .review-candidate select,
 .review-candidate textarea {
   width: 100%;
@@ -374,7 +374,9 @@
   flex: 0 0 auto;
   width: 18px;
   min-height: 18px;
+  height: 18px;
   margin: 2px 0 0;
+  padding: 0;
   accent-color: var(--dex-accent);
 }
 
@@ -414,6 +416,7 @@
 }
 
 .review-form-section input:focus,
+.review-form-section input:not([type="checkbox"]):focus,
 .review-form-section select:focus,
 .review-form-section textarea:focus {
   border-color: #6d91c5;
@@ -745,6 +748,10 @@
 
   .review-candidate-meta {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-candidate-header .review-resource-link {
+    font-size: 0.9rem;
   }
 
   .review-form-section {
