@@ -47,6 +47,7 @@ export function GameSession({
   calibration,
   onCalibration,
   apiKey,
+  aiConsent,
   onFinished,
   onClose,
 }) {
@@ -278,15 +279,12 @@ export function GameSession({
         session_data: next.map((item) => ({ ...item, session_id: session.id })),
         profile: {
           group: clinic ? 'clinic' : 'child',
-          age_years: profile.age_years,
           age_group: profile.age_group,
-          condition: profile.condition,
-          hand: profile.hand,
           language: profile.language,
           difficulty: profile.difficulty,
-          no_timer: profile.condition === 'parkinsons',
           recent_session_accuracy: previousAccuracy,
         },
+        ai_consent: aiConsent,
         subscription_state: 'active',
         usage_stats: {
           free_sessions_count: await countLocalSessions(profile.id),
@@ -308,25 +306,60 @@ export function GameSession({
             const result = await sendSync(payload, apiKey);
             onFinished(finishedSession, next, result);
           } catch {
-            await queueSync(payload);
-            onFinished(finishedSession, next);
+            await queueSync(payload, profile.id);
+            onFinished(
+              finishedSession,
+              next,
+              localBriefReport(
+                reportPayload,
+                profile.language,
+                'Cloud sync or AI analysis failed. Showing only measurements saved on this device.'
+              )
+            );
           }
         } else {
-          await queueSync(payload);
-          onFinished(finishedSession, next);
+          await queueSync(payload, profile.id);
+          onFinished(
+            finishedSession,
+            next,
+            localBriefReport(
+              reportPayload,
+              profile.language,
+              'Offline: measurements are saved on this device; cloud AI was not available.'
+            )
+          );
         }
-      } else if (navigator.onLine) {
+      } else if (aiConsent && navigator.onLine) {
         try {
           const result = await analyzeFreeSession({
             session_data: reportPayload,
             profile: analysisProfile,
+            ai_consent: true,
           });
           onFinished(finishedSession, next, result);
         } catch {
-          onFinished(finishedSession, next, localBriefReport(reportPayload, profile.language));
+          onFinished(
+            finishedSession,
+            next,
+            localBriefReport(
+              reportPayload,
+              profile.language,
+              'Cloud AI analysis failed. Showing only measurements saved on this device.'
+            )
+          );
         }
       } else {
-        onFinished(finishedSession, next, localBriefReport(reportPayload, profile.language));
+        onFinished(
+          finishedSession,
+          next,
+          localBriefReport(
+            reportPayload,
+            profile.language,
+            aiConsent
+              ? 'Offline: cloud AI was not available. Showing measurements saved on this device.'
+              : 'AI analysis is off. No game data was sent to an AI provider.'
+          )
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save this session.');
@@ -342,6 +375,7 @@ export function GameSession({
     total,
     clinic,
     apiKey,
+    aiConsent,
     instruction,
     onFinished,
     voice,
@@ -568,17 +602,12 @@ async function analyzeFreeSession(payload) {
   return response.json();
 }
 
-function localBriefReport(rounds, language) {
+function localBriefReport(rounds, language, analysisStatus) {
   const placed = rounds.reduce((sum, round) => sum + round.objects_placed, 0);
   const total = rounds.reduce((sum, round) => sum + round.objects_total, 0);
   return {
     report: {
-      patient: {
-        report_text: `You placed ${placed} of ${total} pieces. Great work—keep practicing!`,
-        summary: `You placed ${placed} of ${total} pieces.`,
-        audience: 'patient',
-        language,
-      },
+      patient: null,
     },
     performance: {
       rounds: rounds.length,
@@ -588,7 +617,8 @@ function localBriefReport(rounds, language) {
     },
     new_resources: [],
     resource_gaps: [],
-    analysis_unavailable: true,
+    ai_generated: false,
+    analysis_status: analysisStatus,
   };
 }
 

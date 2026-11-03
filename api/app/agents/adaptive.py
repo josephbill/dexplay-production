@@ -17,28 +17,24 @@ async def run(session_data: list[dict], profile: dict, *,
               report_audiences: tuple[str, ...] = ("parent", "therapist", "patient"),
               brief_report: bool = False) -> dict:
     language = profile.get("language", "en")
-    is_child = profile.get("group", "child") == "child"
+    is_child = profile.get("age_group", "7-9") in ("4-6", "7-9", "10-12")
     latest_sessions = profile.get("recent_session_accuracy", [])[-3:]
     fallback_size = int(profile.get("difficulty", {}).get("object_size_mm", 22))
-    therapist = profile.get("clinical_goals", [])
     system = ("You are DexPlay's dexterity coach. Return a difficulty plan by calling plan_dexterity_session. "
-      f"Profile={profile.get('group','child')}, language={language}, age={profile.get('age_years','unspecified')}, "
-      f"condition={profile.get('condition','unspecified')}, goals={therapist}. "
+      f"Player age band={profile.get('age_group','7-9')}, language={language}. "
       "For children use simple, encouraging rationale; never say fail. Change difficulty only after accuracy >90% "
       "for 3 consecutive sessions or <50% for 3 sessions. Otherwise keep the current level. Never diagnose. "
-      "Set time_limit_s null for Parkinson's or when profile requests no timer. Flag a concern only for evidence in supplied data.")
+      "Flag a concern only for evidence in supplied game data.")
     def apply(args):
         accuracies = [float(a) for a in latest_sessions if isinstance(a, (int, float))]
         params = {k: args[k] for k in ("object_size_mm", "time_limit_s", "objects_count", "zone_size_mm", "speed_factor")}
-        if profile.get("condition") == "parkinsons" or profile.get("no_timer"):
-            params["time_limit_s"] = None
         # Validate child-profile constraints after model output.
         if is_child:
             params["object_size_mm"] = min(25, max(18, params["object_size_mm"]))
             params["time_limit_s"] = max(60, params["time_limit_s"] or 60)
         if len(accuracies) < 3 or not (all(v > .90 for v in accuracies[-3:]) or all(v < .50 for v in accuracies[-3:])):
             params["object_size_mm"] = min(25, max(18, fallback_size)) if is_child else fallback_size
-            params["time_limit_s"] = None if profile.get("condition") == "parkinsons" else max(60, int(profile.get("difficulty", {}).get("time_limit_s", 75)))
+            params["time_limit_s"] = max(60, int(profile.get("difficulty", {}).get("time_limit_s", 75) or 60))
             args["reason"] = "Keep the current difficulty until three consecutive sessions meet the profile threshold."
         return {"next_difficulty": {**params, "rationale": args["reason"]}, "flag": args["flag"],
                 "improvement_trend": {"direction": "insufficient_data", "magnitude": 0, "confidence": 0.0}}

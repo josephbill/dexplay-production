@@ -58,6 +58,8 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o
+      - key: RESOURCE_REVIEWER_TOKEN
+        generateValue: true
       # Keep this value stable and back it up; changing it makes saved encrypted data unreadable.
       - key: DATA_ENCRYPTION_KEY
         generateValue: true

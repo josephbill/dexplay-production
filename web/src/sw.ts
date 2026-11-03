@@ -17,10 +17,20 @@ async function flushSessionQueue(){
   const settings=await idbRequest(tx.objectStore('settings').get('api-key')) as {value?:string}|undefined
   const apiKey=settings?.value
   if(!apiKey){database.close();return}
-  const rows=await idbRequest(tx.objectStore('sync_queue').getAll()) as {id:string;payload:unknown;synced:boolean}[]
+  const rows=await idbRequest(tx.objectStore('sync_queue').getAll()) as {id:string;payload:Record<string,unknown>;synced:boolean;profile_id?:string}[]
   await transactionDone(tx)
   for(const row of rows.filter(item=>!item.synced)){
-    const response=await fetch(`${API}/sync`,{method:'POST',headers:{'Content-Type':'application/json','X-Device-Key':apiKey},body:JSON.stringify(row.payload)})
+    const patientId=typeof row.payload.patient_id==='string'?row.payload.patient_id:undefined
+    const profileId=row.profile_id||patientId
+    let currentlyConsented=false
+    if(profileId){
+      const consentTx=database.transaction('settings','readonly')
+      const consent=await idbRequest(consentTx.objectStore('settings').get(`ai-consent:${profileId}`)) as {value?:unknown}|undefined
+      await transactionDone(consentTx)
+      currentlyConsented=consent?.value===true
+    }
+    const payload={...row.payload,ai_consent:Boolean(row.payload.ai_consent&&currentlyConsented)}
+    const response=await fetch(`${API}/sync`,{method:'POST',headers:{'Content-Type':'application/json','X-Device-Key':apiKey},body:JSON.stringify(payload)})
     if(!response.ok){if(response.status>=500||response.status===429)throw new Error('Temporary cloud sync failure');continue}
     const write=database.transaction('sync_queue','readwrite');write.objectStore('sync_queue').delete(row.id);await transactionDone(write)
     const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});clients.forEach(client=>client.postMessage({type:'dexplay-sync-complete',id:row.id}))

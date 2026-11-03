@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { db, getSetting, pendingSyncCount, recentSessions, setSetting } from './db';
 import { languages, detectLanguage, dictionary, t } from './i18n';
+import { aiConsentDescription } from './i18n/aiConsent';
 import { GameSession } from './components/GameSession';
 import { CameraCoach } from './cv/CameraCoach';
 import { CameraBench } from './components/CameraBench';
@@ -35,6 +36,8 @@ export default function App() {
     const [theme, setTheme] = useState('child'), [highContrast, setHighContrast] = useState(false), [voice, setVoice] = useState(true);
     const [apiKey, setApiKey] = useState(''), [online, setOnline] = useState(navigator.onLine), [pending, setPending] = useState(0), [installPrompt, setInstallPrompt] = useState(null);
     const [cloudReport, setCloudReport] = useState(null), [resources, setResources] = useState([]);
+    const [aiConsent, setAiConsent] = useState(false), [analysisStatus, setAnalysisStatus] = useState('');
+    const [difficultyProposal, setDifficultyProposal] = useState(null);
     const [error, setError] = useState(''), [notice, setNotice] = useState(''), [reminderTime, setReminderTime] = useState('18:00'), [notifyPermission, setNotifyPermission] = useState(() => typeof Notification === 'undefined' ? 'default' : Notification.permission);
     const dict = useMemo(() => dictionary(language), [language]);
     const clinic = group === 'clinic';
@@ -49,6 +52,9 @@ export default function App() {
             ]);
             const dbPatients = await (await db()).getAll('patients');
             const storedResources = await (await db()).getAll('resource_cache');
+            const profileConsent = savedProfile
+                ? await getSetting(`ai-consent:${savedProfile.id}`, false)
+                : false;
             if (!live)
                 return;
             setLanguage(savedLanguage);
@@ -63,6 +69,7 @@ export default function App() {
             setCalibration(savedCalibration);
             setReminderTime(savedReminder);
             setResources(storedResources);
+            setAiConsent(profileConsent);
             if (savedProfile && savedGroup)
                 setRoute('home');
             else
@@ -123,12 +130,13 @@ export default function App() {
         await (await db()).put('patients', next);
         await setSetting('current-profile', next);
         await setSetting('group', next.group);
+        setAiConsent(false);
         setProfile(next);
         setGroup(next.group);
         setPatients(await (await db()).getAll('patients'));
         setRoute('calibrate');
     }, []);
-    const changePatient = async (next) => { setProfile(next); await setSetting('current-profile', next); setCalibration(await getSetting(`calibration:${next.id}`, [])); setRoute('home'); };
+    const changePatient = async (next) => { setProfile(next); setAiConsent(await getSetting(`ai-consent:${next.id}`, false)); await setSetting('current-profile', next); setCalibration(await getSetting(`calibration:${next.id}`, [])); setRoute('home'); };
     const onCalibration = async (points) => {
         setCalibration(points);
         await setSetting('calibration:default', points);
@@ -137,28 +145,23 @@ export default function App() {
     };
     const finishGame = async (session, _rounds, result) => {
         setCloudReport(null);
+        const status = result?.analysis_status || 'Only local game measurements are available; no AI result was received.';
+        const gaps = result?.resource_gaps || [];
+        setAnalysisStatus(gaps.length ? `${status} Resource availability: ${gaps.join(' ')}` : status);
+        setDifficultyProposal(result?.difficulty_proposal_available ? result.next_difficulty : null);
         if (result) {
-            if (result.analysis_unavailable)
-                setNotice('Cloud analysis is temporarily unavailable. Showing a brief summary from your on-device results.');
             const reports = result.report;
-            if (hasReportContent(reports)) {
+            if (result.ai_generated && hasReportContent(reports)) {
                 setCloudReport(reports);
                 await setSetting(`report:${session.id}`, reports);
                 if (apiKey)
                     await setSetting(await cloudSyncMarker(session.id, apiKey), true);
             }
-            const next = result.next_difficulty;
-            if (next && profile) {
-                const revised = { ...profile, difficulty: next };
-                await (await db()).put('patients', revised);
-                await setSetting('current-profile', revised);
-                setProfile(revised);
-            }
             const delivered = result.new_resources;
             if (delivered?.length) {
                 for (const item of delivered) {
                     try {
-                        await downloadResource(item, profile?.id ?? '');
+                        await saveResource(item, profile?.id ?? '');
                     }
                     catch (err) {
                         setError(err instanceof Error ? err.message : 'Resource download failed.');
@@ -170,6 +173,17 @@ export default function App() {
         }
         setPending(await pendingSyncCount());
         setRoute('reports');
+    };
+    const saveDifficultyChoice = async (difficulty) => {
+        if (!profile)
+            return;
+        const { rationale, ...settings } = difficulty;
+        const revised = { ...profile, difficulty: settings };
+        await (await db()).put('patients', revised);
+        await setSetting('current-profile', revised);
+        setProfile(revised);
+        setDifficultyProposal(null);
+        setNotice('Your selected game difficulty was saved for the next session.');
     };
     const deleteLocalData = async () => {
         if (!window.confirm('Delete all DexPlay information stored on this device?'))
@@ -203,11 +217,12 @@ export default function App() {
         {error && <div className="alert error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}{notice && <div className="alert success" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss">×</button></div>}
         {route === 'calibrate' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'camera')}</p><h1>{localText(dict, 'mat')}</h1><p>{localText(dict, 'camera_help')}</p><a className="button secondary" href="/mat.svg" target="_blank" rel="noreferrer">{localText(dict, 'mat')}</a></div><CameraCoach active clinic dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={() => { }} onCameraStatus={setCameraStatus}/>{calibration.length === 4 && <button className="button primary large" disabled={cameraStatus !== 'ready'} onClick={() => setRoute('home')}>{localText(dict, 'calibrated')} · {localText(dict, 'continue')}</button>}</section>}
         {route === 'home' && <HomeScreen profile={profile} clinic={clinic} dict={dict} patients={patients} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')} onPrint={() => setRoute('reports')}/>}
-        {route === 'play' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'play')}</p><h1>{profile.name}, {localText(dict, 'welcome')}</h1><p>{localText(dict, 'camera_privacy')}</p></div><GameSession profile={profile} clinic={clinic} voice={voice} dict={dict} calibration={calibration} onCalibration={onCalibration} apiKey={apiKey} onFinished={finishGame} onClose={() => setRoute('home')}/></section>}
+        {route === 'play' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'play')}</p><h1>{profile.name}, {localText(dict, 'welcome')}</h1><p>{localText(dict, 'camera_privacy')}</p></div><GameSession profile={profile} clinic={clinic} voice={voice} dict={dict} calibration={calibration} onCalibration={onCalibration} apiKey={apiKey} aiConsent={aiConsent} onFinished={finishGame} onClose={() => setRoute('home')}/></section>}
         {route === 'patients' && clinic && <ClinicScreen profile={profile} patients={patients} dict={dict} onSwitch={changePatient} onAdd={() => setRoute('setup')} onPlay={() => setRoute('play')}/>}
-        {route === 'reports' && <ReportsScreen profile={profile} clinic={clinic} dict={dict} cloudReport={cloudReport} apiKey={apiKey} onPrint={() => window.print()} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')}/>}
-        {route === 'resources' && <ResourcesScreen resources={resources} dict={dict} onDelete={async (id) => { await removeResource(id); setResources(await (await db()).getAll('resource_cache')); }}/>}
-        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))} onSyncComplete={async () => setPending(await pendingSyncCount())}/>}
+        {route === 'reports' && <ReportsScreen profile={profile} clinic={clinic} dict={dict} cloudReport={cloudReport} analysisStatus={analysisStatus} difficultyProposal={difficultyProposal} onDifficultyAccept={saveDifficultyChoice} onDifficultyDecline={() => { setDifficultyProposal(null); setAnalysisStatus('Difficulty proposal declined. The saved game settings were not changed.'); }} apiKey={apiKey} onPrint={() => window.print()} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')}/>}
+        {route === 'resources' && <ResourcesScreen resources={resources} profile={profile} dict={dict} onDelete={async (id) => { await removeResource(id); setResources(await (await db()).getAll('resource_cache')); }}/>}
+        {route === 'resource-review' && <ResourceReviewScreen onBack={() => setRoute('settings')}/>}
+        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} aiConsent={aiConsent} onAiConsent={async (value) => { setAiConsent(value); await setSetting(`ai-consent:${profile.id}`, value); }} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onResourceReview={() => setRoute('resource-review')} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))} onSyncComplete={async () => setPending(await pendingSyncCount())}/>}
       </main>
     </div>
     <nav className="mobile-nav" aria-label="Main navigation">{nav.map(([path, label, icon]) => <button key={path} className={route === path ? 'active' : ''} onClick={() => setRoute(path)}><span aria-hidden="true">{icon}</span><small>{localText(dict, label)}</small></button>)}</nav>
@@ -243,30 +258,55 @@ function ClinicScreen({ profile, patients, dict, onSwitch, onAdd, onPlay }) {
   </section>;
 }
 function PatientRow({ profile, count, onClick }) { const [last, setLast] = useState(null); useEffect(() => { void recentSessions(profile.id, 1).then(rows => setLast(rows[0] ?? null)); }, [profile.id, count]); return <button className="patient-row" onClick={onClick}><strong>{profile.name}</strong><span>{profile.age_years}</span><span>{profile.condition || '—'}</span><span>{count}</span><span>{last ? new Date(last.started_at).toLocaleDateString() : '—'}</span></button>; }
-function ReportsScreen({ profile, clinic, dict, cloudReport, apiKey, onPrint, onPlay, onSettings }) {
+function ReportsScreen({ profile, dict, cloudReport, analysisStatus, difficultyProposal, onDifficultyAccept, onDifficultyDecline, apiKey, onPrint, onPlay, onSettings }) {
     const [sessions, setSessions] = useState([]), [rounds, setRounds] = useState([]);
-    useEffect(() => { void (async () => { const rows = await recentSessions(clinic ? undefined : profile.id, 200); setSessions(rows); if (rows[0]) {
+    useEffect(() => { void (async () => { const rows = await recentSessions(profile.id, 200); setSessions(rows); if (rows[0]) {
         const all = await (await db()).getAllFromIndex('rounds', 'by-session', rows[0].id);
         setRounds(all);
         const saved = await getSetting(`report:${rows[0].id}`, null);
         if (saved)
             setCloudReportSafe(saved);
-    } const latest = await getSetting('latest-cloud-report', null); if (latest)
-        setCloudReportSafe(previous => previous ?? latest); })(); }, [clinic, profile.id]);
+    } })(); }, [profile.id]);
     const [storedReport, setStoredReport] = useState(cloudReport);
     const setCloudReportSafe = (value) => setStoredReport(value);
     const hasReportContent = (report) => Boolean(report && ['parent', 'therapist', 'patient'].some(audience => report[audience]?.report_text));
     const chosen = [cloudReport, storedReport].find(hasReportContent);
     const hasReport = Boolean(chosen);
     const average = rounds.length ? Math.round(rounds.reduce((sum, row) => sum + row.accuracy, 0) / rounds.length * 100) : 0;
-    return <section className="page report-page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'reports')}</p><h1>{localText(dict, 'reports')}</h1><p>{clinic ? localText(dict, 'active_patients') + `: ${sessions.length}` : profile.name}</p><button className="button primary" onClick={onPlay}>{localText(dict, 'start')}</button></div>
-    {hasReport ? <><div className="report-actions"><button className="button primary" onClick={onPrint}>{localText(dict, 'print')}</button></div><div className="print-report"><div className="report-title"><h2>DexPlay · {profile.name}</h2><p>{new Date(sessions[0]?.started_at ?? Date.now()).toLocaleDateString(languageLocale(profile.language))} · {localText(dict, 'total_sessions')}: {sessions.length} · {localText(dict, 'score')}: {average}%</p></div>{chosen.parent?.report_text && <article className="report-copy"><h3>{localText(dict, 'parent')}</h3><p>{chosen.parent.report_text}</p></article>}{chosen.therapist?.report_text && <article className="report-copy"><h3>{localText(dict, 'therapist')}</h3><p>{chosen.therapist.report_text}</p></article>}{chosen.patient?.report_text && <article className="report-copy"><h3>{localText(dict, 'patient')}</h3><p>{chosen.patient.report_text}</p></article>}</div></> : <article className="panel report-lock"><span className="lock-icon">{apiKey ? '☁' : '🔒'}</span><h2>{localText(dict, 'reports')}</h2><p>{apiKey ? 'Your access key is active. Cloud reports are available after a session syncs successfully. Complete a session while online, or sync a queued session from Settings.' : localText(dict, 'report_locked')}</p><p>{localText(dict, 'camera_privacy')}</p><div className="local-progress"><strong>{average}%</strong><span>{localText(dict, 'score')} · {rounds.length} {localText(dict, 'round')}</span></div>{apiKey && <button className="button secondary" onClick={onSettings}>{localText(dict, 'settings')}</button>}</article>}
+    const placed = rounds.reduce((sum, row) => sum + row.objects_placed, 0);
+    const total = rounds.reduce((sum, row) => sum + row.objects_total, 0);
+    const fumbles = rounds.reduce((sum, row) => sum + row.fumbles, 0);
+    const averageTime = rounds.length ? (rounds.reduce((sum, row) => sum + row.avg_time, 0) / rounds.length).toFixed(1) : '0.0';
+    return <section className="page report-page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'reports')}</p><h1>{localText(dict, 'reports')}</h1><p>{profile.name} · {sessions.length} {localText(dict, 'total_sessions')}</p><button className="button primary" onClick={onPlay}>{localText(dict, 'start')}</button></div>
+    <article className="panel"><h2>Measured game results</h2><p>Recorded on this device from the completed color-sorting rounds.</p><div className="stat-grid"><div className="stat-card"><small>Pieces placed</small><strong>{placed}/{total}</strong></div><div className="stat-card"><small>Round accuracy</small><strong>{average}%</strong></div><div className="stat-card"><small>Average seconds per piece</small><strong>{averageTime}</strong></div><div className="stat-card"><small>Misplacements</small><strong>{fumbles}</strong></div></div>{rounds.length > 0 && <div className="recent-list"><h3>Round details</h3>{rounds.map(row => <p key={row.id}>Round {row.round_num}: {row.objects_placed}/{row.objects_total} placed · {Math.round(row.accuracy * 100)}% · {row.avg_time}s per piece · {row.fumbles} misplacements</p>)}</div>}</article>
+    {analysisStatus && <p className="notice" role="status">{analysisStatus}</p>}
+    {difficultyProposal && <DifficultyProposal proposal={difficultyProposal} onAccept={onDifficultyAccept} onDecline={onDifficultyDecline}/>}
+    {hasReport ? <><div className="report-actions"><button className="button primary" onClick={onPrint}>{localText(dict, 'print')}</button></div><div className="print-report"><div className="report-title"><h2>AI-generated DexPlay game feedback · {profile.name}</h2><p>Based on the measurements above. General activity feedback only—not diagnosis, therapy, or individualized clinical advice.</p></div>{chosen.parent?.report_text && <article className="report-copy"><h3>{localText(dict, 'parent')}</h3><p>{chosen.parent.report_text}</p></article>}{chosen.therapist?.report_text && <article className="report-copy"><h3>{localText(dict, 'therapist')}</h3><p>{chosen.therapist.report_text}</p></article>}{chosen.patient?.report_text && <article className="report-copy"><h3>{localText(dict, 'patient')}</h3><p>{chosen.patient.report_text}</p></article>}</div></> : <article className="panel report-lock"><span className="lock-icon">{apiKey ? '☁' : '🔒'}</span><h2>AI report not available</h2><p>{analysisStatus || (apiKey ? 'Cloud reports are available after consented analysis and successful sync.' : 'AI reports require your separate, optional consent in Settings.')}</p><p>Your local measurements and session history remain available without cloud AI.</p>{apiKey && <button className="button secondary" onClick={onSettings}>{localText(dict, 'settings')}</button>}</article>}
     <div className="panel recent-list"><h2>{localText(dict, 'recent_sessions')}</h2>{sessions.slice(0, 10).map(session => <div className="recent-row" key={session.id}><span>{new Date(session.started_at).toLocaleString(languageLocale(profile.language))}</span><span>{session.mode}</span></div>)}</div>
   </section>;
 }
-function ResourcesScreen({ resources, dict, onDelete }) {
+function DifficultyProposal({ proposal, onAccept, onDecline }) {
+    const [draft, setDraft] = useState({ ...proposal });
+    const update = (key, value) => setDraft(current => ({ ...current, [key]: value }));
+    const valid = Number.isInteger(draft.object_size_mm) && draft.object_size_mm >= 12 && draft.object_size_mm <= 60 &&
+        Number.isInteger(draft.time_limit_s) && draft.time_limit_s >= 20 && draft.time_limit_s <= 600 &&
+        Number.isInteger(draft.objects_count) && draft.objects_count >= 1 && draft.objects_count <= 30;
+    return <article className="panel difficulty-proposal"><h2>AI difficulty proposal</h2><p>{proposal.rationale || 'The assistant suggests these settings for a future game.'}</p><p>Review and choose: accept it, adjust it, or decline it. It will not be applied until you confirm.</p><div className="difficulty-fields">
+      <label>Object size (mm)<input type="number" min="12" max="60" value={draft.object_size_mm ?? 22} onChange={event => update('object_size_mm', Number(event.target.value))}/></label>
+      <label>Time limit (seconds)<input type="number" min="20" max="600" value={draft.time_limit_s ?? 60} onChange={event => update('time_limit_s', Number(event.target.value))}/></label>
+      <label>Objects per round<input type="number" min="1" max="30" value={draft.objects_count ?? 5} onChange={event => update('objects_count', Number(event.target.value))}/></label>
+    </div><div className="form-actions"><button className="button secondary" onClick={onDecline}>Decline</button><button className="button primary" disabled={!valid} onClick={() => onAccept(draft)}>Accept selected settings</button></div><p className="muted">A general game-setting suggestion—not clinical advice.</p></article>;
+}
+function ResourcesScreen({ resources, profile, dict, onDelete }) {
     const [openUrl, setOpenUrl] = useState('');
-    return <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'resources')}</p><h1>{localText(dict, 'resources')}</h1><p>{localText(dict, 'camera_privacy')}</p></div>{resources.length === 0 ? <article className="panel empty-state"><div>◇</div><h2>{localText(dict, 'no_resources')}</h2></article> : <div className="resource-grid">{resources.map(item => <article className="resource-card" key={item.id}><span className="resource-type">{item.type.toUpperCase()} · {item.language.toUpperCase()}</span><h2>{item.title}</h2><p>{item.size_mb} MB</p><div className="resource-actions"><button className="button secondary" onClick={() => setOpenUrl(openUrl === item.id ? '' : item.id)}>{localText(dict, 'continue')}</button><button className="text-link danger-link" onClick={() => onDelete(item.id)}>{localText(dict, 'delete')}</button></div>{openUrl === item.id && <ResourcePreview item={item}/>}</article>)}</div>}</section>;
+    const [published, setPublished] = useState([]);
+    const [catalogError, setCatalogError] = useState('');
+    useEffect(() => { let active = true; void fetch(`${API}/resources?age_group=${encodeURIComponent(profile.age_group)}&language=${encodeURIComponent(profile.language)}`).then(async response => {
+      if (!response.ok) throw new Error(`Resource catalog unavailable (${response.status}).`);
+      return response.json();
+    }).then(data => { if (active) { setPublished(data.resources || []); setCatalogError(''); } }).catch(reason => { if (active) { setPublished([]); setCatalogError(reason instanceof Error ? reason.message : 'Published resources could not be loaded.'); } }); return () => { active = false; }; }, [profile.age_group, profile.language]);
+    const allResources = [...published, ...resources.filter(item => !published.some(entry => entry.id === item.id))];
+    return <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'resources')}</p><h1>{localText(dict, 'resources')}</h1><p>Reviewed links and locally saved catalog files. External links are not clinical validation.</p></div>{catalogError && <p className="notice" role="status">{catalogError}</p>}{allResources.length === 0 ? <article className="panel empty-state"><div>◇</div><h2>{localText(dict, 'no_resources')}</h2><p>There are currently no published resources matching this broad age band.</p></article> : <div className="resource-grid">{allResources.map(item => <article className="resource-card" key={item.id}><span className="resource-type">{item.externally_sourced ? 'EXTERNAL WEB RESOURCE' : item.type.toUpperCase()} · {(item.language || 'en').toUpperCase()}</span><h2>{item.title}</h2>{item.externally_sourced ? <><p>Source: {item.source}</p><p>Access: {item.access_status}; license: {item.license}</p><p>Age range: {item.age_range}</p><p>Mat activity relevance: {item.mat_relevance}</p><p>Safety notes: {item.safety_notes}</p><p>Review notes: {item.review_notes || 'None recorded'}</p><p>Discovered: {item.discovered_at ? new Date(item.discovered_at).toLocaleDateString() : 'Not recorded'} · Link checked: {item.verified_at ? new Date(item.verified_at).toLocaleDateString() : 'Not verified'} ({item.link_status || 'status unknown'})</p><p>Reviewed by {item.reviewer_role || 'designated reviewer'} on {item.reviewed_at ? new Date(item.reviewed_at).toLocaleDateString() : 'date unavailable'}.</p><p>{item.clinic_recommended ? `Clinic-approved for this PoC. Evidence: ${item.clinic_approval_evidence}` : 'Externally sourced; not clinic-recommended.'} This link is not clinically validated.</p><a className="button secondary" href={item.url} target="_blank" rel="noopener noreferrer">Open external resource</a></> : <><p>{item.license || ''}</p><p>{item.clinic_recommended ? `Clinic-approved for this PoC. Evidence: ${item.clinic_approval_evidence}` : 'Catalog resource; not clinic-recommended.'}</p>{resources.some(row => row.id === item.id) ? <div className="resource-actions"><button className="button secondary" onClick={() => setOpenUrl(openUrl === item.id ? '' : item.id)}>{localText(dict, 'continue')}</button><button className="text-link danger-link" onClick={() => onDelete(item.id)}>{localText(dict, 'delete')}</button></div> : <a className="button secondary" href={item.url} target="_blank" rel="noopener noreferrer">Open catalog resource</a>}{openUrl === item.id && <ResourcePreview item={item}/>}</>}</article>)}</div>}</section>;
 }
 function ResourcePreview({ item }) { const [url, setUrl] = useState(''); useEffect(() => { let objectUrl = ''; void caches.open('dexplay-resources').then(cache => cache.match(item.url)).then(async (response) => { if (response) {
     objectUrl = URL.createObjectURL(await response.blob());
@@ -274,7 +314,110 @@ function ResourcePreview({ item }) { const [url, setUrl] = useState(''); useEffe
 } }); return () => { if (objectUrl)
     URL.revokeObjectURL(objectUrl); }; }, [item.url]); if (!url)
     return <p>Offline file could not be opened. Re-download it while online.</p>; return item.type === 'video' ? <video controls playsInline src={url} className="resource-player"/> : <iframe title={item.title} src={url} className="resource-document"/>; }
-function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, voice, apiKey, reminderTime, notifyPermission, installPrompt, onLanguage, onProfileLanguage, onTheme, onContrast, onVoice, onApiKey, onReminder, onPermission, onDelete, onRefreshInstall, onResources, onSyncComplete }) {
+function ResourceReviewScreen({ onBack }) {
+    const [token, setToken] = useState('');
+    const [candidates, setCandidates] = useState([]);
+    const [published, setPublished] = useState([]);
+    const [status, setStatus] = useState('');
+    const [error, setError] = useState('');
+    const [busy, setBusy] = useState(false);
+    const request = async (path, method = 'GET', body) => {
+        const response = await fetch(`${API}${path}`, {
+            method,
+            headers: {
+                Authorization: `Bearer ${token}`,
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok)
+            throw new Error(data.detail || `Reviewer request failed (${response.status}).`);
+        return data;
+    };
+    const loadQueue = async () => {
+        if (!token.trim()) {
+            setError('Enter the reviewer credential supplied by the deployment administrator.');
+            return;
+        }
+        setBusy(true);
+        setError('');
+        try {
+            const [queue, catalog] = await Promise.all([
+                request('/review/resources/candidates'),
+                request('/review/resources/published'),
+            ]);
+            setCandidates(queue.candidates || []);
+            setPublished(catalog.resources || []);
+            setStatus('Reviewer access verified. Pending items are visible only in this protected workflow.');
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : 'Could not load the review queue.');
+        } finally {
+            setBusy(false);
+        }
+    };
+    const discover = async () => {
+        setBusy(true);
+        setError('');
+        try {
+            const result = await request('/review/resources/discover', 'POST');
+            const discoveryStatus = `Discovery checked the approved OT Toolbox RSS feed; ${result.added.length} candidate(s) added. Daily requests: ${result.daily_requests_used}/${result.daily_request_limit}. Physio-Pedia status: deferred because its public sitemap returned 403; it was not fetched.`;
+            await loadQueue();
+            setStatus(discoveryStatus);
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : 'Approved-source discovery failed.');
+        } finally {
+            setBusy(false);
+        }
+    };
+    const review = async (id, action, body) => {
+        setBusy(true);
+        setError('');
+        try {
+            await request(`/review/resources/candidates/${encodeURIComponent(id)}/${action}`, 'POST', body);
+            await loadQueue();
+            setStatus(action === 'approve' ? 'Resource published after explicit human approval.' : 'Candidate rejected and retained in the review history.');
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : 'Review action failed.');
+        } finally {
+            setBusy(false);
+        }
+    };
+    return <section className="page settings-page"><div className="page-heading"><p className="eyebrow">Protected workflow</p><h1>Resource review queue</h1><p>Only the designated DexPlay content reviewer can discover candidates or publish them. Candidates are never shown to users before approval.</p><button className="button secondary" onClick={onBack}>Back to Settings</button></div>
+      <article className="panel settings-section"><h2>Reviewer access</h2><p>The deployment administrator configures the server-only RESOURCE_REVIEWER_TOKEN. Enter it here for this page session; it is not saved in browser storage or sent to logs.</p><label>Reviewer credential<input type="password" autoComplete="off" value={token} onChange={event => setToken(event.target.value)}/></label><div className="form-actions"><button className="button secondary" disabled={busy || !token} onClick={() => void loadQueue()}>Load review queue</button><button className="button primary" disabled={busy || !token} onClick={() => void discover()}>Discover from approved feeds</button></div>{status && <p className="notice" role="status">{status}</p>}{error && <p className="error-text" role="alert">{error}</p>}</article>
+      <article className="panel"><h2>Allowed sources</h2><p>The OT Toolbox: public RSS feed; checked only when the reviewer starts discovery.</p><p>Physio-Pedia: approved hostname, but automated discovery is deferred because its public sitemap returned HTTP 403. No restricted endpoint is accessed.</p><p>Discovery is capped at 10 feed requests per UTC day. Link checks do not follow redirects. License and public-access status require reviewer confirmation.</p></article>
+      <h2>Pending candidates ({candidates.length})</h2>{candidates.map(item => <ReviewCandidateCard key={item.id} item={item} disabled={busy} onReview={review}/>)}{!candidates.length && <p>No pending candidates are available.</p>}
+      <h2>Published resources ({published.length})</h2>{published.map(item => <article className="panel" key={item.id}><h3>{item.title}</h3><p>{item.source} · <a href={item.url} target="_blank" rel="noopener noreferrer">{item.url}</a></p><p>Discovered {new Date(item.discovered_at).toLocaleString()} · link checked {item.verified_at ? new Date(item.verified_at).toLocaleString() : 'not verified'} ({item.link_status})</p><p>Access: {item.access_status}; license: {item.license_info}; age range: {item.age_range}</p><p>Mat relevance: {item.mat_relevance}</p><p>Safety notes: {item.safety_notes}</p><p>Review notes: {item.review_notes || 'None'}</p><p>{item.clinic_approved ? `Clinic-approved globally for this PoC. Evidence: ${item.clinic_approval_evidence}` : 'Externally sourced; not clinic-recommended.'}</p><p>Reviewed by {item.reviewer_role} on {item.reviewed_at ? new Date(item.reviewed_at).toLocaleString() : 'unknown date'}.</p></article>)}
+    </section>;
+}
+function ReviewCandidateCard({ item, disabled, onReview }) {
+    const [form, setForm] = useState({
+        access_status: 'unknown',
+        license_info: 'Unknown; reviewer must check source terms.',
+        age_range: '',
+        mat_relevance: '',
+        safety_notes: '',
+        review_notes: '',
+        link_verified: item.link_status === 'HTTP 200',
+        clinic_approved: false,
+        clinic_approval_evidence: '',
+    });
+    const change = (key, value) => setForm(current => ({ ...current, [key]: value }));
+    return <article className="panel review-candidate"><p className="notice">Candidate only — not approved or visible to users.</p><h3>{item.title}</h3><p>Source/publisher: {item.source}</p><p><a href={item.url} target="_blank" rel="noopener noreferrer">{item.url}</a></p><p>Discovered: {new Date(item.discovered_at).toLocaleString()} · Link check: {item.verified_at ? new Date(item.verified_at).toLocaleString() : 'not checked'} · {item.link_status}</p>
+      <label>Access status<select value={form.access_status} onChange={event => change('access_status', event.target.value)}><option value="unknown">Unknown / not reviewed</option><option value="free_public">Free and publicly accessible</option><option value="account_required">Account required</option><option value="paid">Paid</option></select></label>
+      <label>License/copyright information<input value={form.license_info} onChange={event => change('license_info', event.target.value)}/></label>
+      <label>Intended age range<input value={form.age_range} onChange={event => change('age_range', event.target.value)} placeholder="e.g. 4-12 or all ages"/></label>
+      <label>Mat-activity relevance<textarea value={form.mat_relevance} onChange={event => change('mat_relevance', event.target.value)}/></label>
+      <label>Safety/review notes<textarea value={form.safety_notes} onChange={event => change('safety_notes', event.target.value)}/></label>
+      {item.link_status !== 'HTTP 200' && <label className="consent-check"><input type="checkbox" checked={form.link_verified} onChange={event => change('link_verified', event.target.checked)}/>I manually checked that this link resolves to the reviewed resource</label>}
+      <label>Reviewer notes (required if link check is inconclusive)<textarea value={form.review_notes} onChange={event => change('review_notes', event.target.value)}/></label>
+      <label className="consent-check"><input type="checkbox" checked={form.clinic_approved} onChange={event => change('clinic_approved', event.target.checked)}/>A clinic explicitly approved this resource for global use in this PoC</label>
+      {form.clinic_approved && <label>Clinic approval evidence<textarea value={form.clinic_approval_evidence} onChange={event => change('clinic_approval_evidence', event.target.value)} placeholder="Record the explicit clinic approval and its source."/></label>}
+      <p className="muted">Publishing requires a free/public access review, age range, mat relevance, safety notes, and license status. Unknown license status must remain explicit. If the link cannot be verified, the published record will show its inconclusive status and review notes.</p>
+      <div className="form-actions"><button className="button secondary" disabled={disabled} onClick={() => onReview(item.id, 'reject')}>Reject</button><button className="button primary" disabled={disabled || form.access_status !== 'free_public' || !form.age_range.trim() || !form.mat_relevance.trim() || !form.safety_notes.trim() || !form.license_info.trim() || (item.link_status !== 'HTTP 200' && !form.review_notes.trim()) || (form.clinic_approved && !form.clinic_approval_evidence.trim())} onClick={() => onReview(item.id, 'approve', form)}>Approve and publish</button></div>
+    </article>;
+}
+function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, voice, aiConsent, onAiConsent, apiKey, reminderTime, notifyPermission, installPrompt, onResourceReview, onLanguage, onProfileLanguage, onTheme, onContrast, onVoice, onApiKey, onReminder, onPermission, onDelete, onRefreshInstall, onResources, onSyncComplete }) {
     const [keyInput, setKeyInput] = useState(''), [scan, setScan] = useState(false), [phone, setPhone] = useState(''), [smsConsent, setSmsConsent] = useState(false), [activationError, setActivationError] = useState(''), [busy, setBusy] = useState(false), [online, setOnline] = useState(navigator.onLine);
     const [syncMessage, setSyncMessage] = useState(''), [syncError, setSyncError] = useState(false);
     const [clinicKeys, setClinicKeys] = useState([]), [paypalConfig, setPaypalConfig] = useState(null), [paypalConfigError, setPaypalConfigError] = useState('');
@@ -361,7 +504,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         const database = await db();
         const keyFingerprint = await cloudKeyFingerprint(apiKey);
         const queue = await database.getAll('sync_queue');
-        let syncedCount = 0, reportCount = 0, resourceFailureCount = 0;
+        let syncedCount = 0, reportCount = 0, aiSkippedCount = 0, resourceFailureCount = 0, resourceGapCount = 0;
         const reportFailures = new Set();
         const attemptedSessionIds = new Set();
         const requestSync = async (payload, source) => {
@@ -428,6 +571,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                 .filter(audience => data.report?.[audience]?.report_text);
             const hasReport = generatedAudiences.length > 0;
             const completeReport = generatedAudiences.length === expectedAudiences.length;
+            resourceGapCount += (data.resource_gaps || []).length;
             console.info('[DexPlay sync] analysis_result', {
                 request_id: requestId,
                 report_audiences: generatedAudiences,
@@ -437,10 +581,11 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
             });
             if (hasReport) {
                 await setSetting(`report:${sessionId}`, data.report);
-                await setSetting('latest-cloud-report', data.report);
             }
             if (completeReport) {
                 reportCount++;
+            } else if (data.ai_skipped) {
+                aiSkippedCount++;
             } else {
                 const unavailable = (data.agents_unavailable || [])
                     .filter(agent => agent === 'adaptive' || agent === 'reports' || agent.startsWith('report_'));
@@ -452,7 +597,7 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
             }
             for (const item of data.new_resources || []) {
                 try {
-                    await downloadResource(item, profileId);
+                    await saveResource(item, profileId);
                 }
                 catch (err) {
                     console.error('[DexPlay sync] resource_download_failed', {
@@ -472,9 +617,15 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
             online: navigator.onLine,
         });
         for (const row of queue.filter(item => !item.synced)) {
-            const request = await requestSync(row.payload, 'offline_queue');
-            const sessionId = row.payload.session_data?.at(-1)?.session_id;
-            await saveResponse(request.response, sessionId || row.id, row.payload.patient_id || profile.id, request.requestId);
+            const queuedProfileId = row.profile_id || row.payload.patient_id || profile.id;
+            const currentlyConsented = await getSetting(`ai-consent:${queuedProfileId}`, false);
+            const queuedPayload = {
+                ...row.payload,
+                ai_consent: Boolean(row.payload.ai_consent && currentlyConsented),
+            };
+            const request = await requestSync(queuedPayload, 'offline_queue');
+            const sessionId = queuedPayload.session_data?.at(-1)?.session_id;
+            await saveResponse(request.response, sessionId || row.id, queuedProfileId, request.requestId);
             await database.delete('sync_queue', row.id);
             syncedCount++;
         }
@@ -511,18 +662,16 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
                 console.warn('[DexPlay sync] completed_session_has_no_rounds');
                 continue;
             }
+            const profileAiConsent = await getSetting(`ai-consent:${sessionProfile.id}`, false);
             const payload = {
                 session_data: rounds.map(round => ({ ...round, session_id: session.id })),
                 profile: {
                     group: clinic ? 'clinic' : 'child',
-                    age_years: sessionProfile.age_years,
                     age_group: sessionProfile.age_group,
-                    condition: sessionProfile.condition,
-                    hand: sessionProfile.hand,
                     language: sessionProfile.language,
                     difficulty: session.difficulty_params || sessionProfile.difficulty,
-                    no_timer: sessionProfile.condition === 'parkinsons',
                 },
+                ai_consent: profileAiConsent,
                 subscription_state: 'active',
                 usage_stats: {
                     free_sessions_count: allSessions.length,
@@ -544,16 +693,25 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         }
         await onSyncComplete();
         await onResources();
+        const reportErrorCount = syncedCount - reportCount - aiSkippedCount;
         const message = syncedCount
-            ? reportCount === syncedCount
+            ? reportErrorCount === 0 && aiSkippedCount === 0
                 ? `${syncedCount} session${syncedCount === 1 ? '' : 's'} synced. Cloud reports are saved on this device.`
-                : `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded; ${syncedCount - reportCount} report${syncedCount - reportCount === 1 ? '' : 's'} could not be generated${reportFailures.size ? ` (${[...reportFailures].join(', ')} unavailable)` : ''}. Sync retries generation; if this persists, the cloud report service needs attention.`
+                : reportErrorCount > 0
+                    ? `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded; ${reportErrorCount} report${reportErrorCount === 1 ? '' : 's'} could not be generated${reportFailures.size ? ` (${[...reportFailures].join(', ')} unavailable)` : ''}.`
+                    : `${syncedCount} session${syncedCount === 1 ? '' : 's'} uploaded.`
             : skippedCount
                 ? `No unsynced sessions found. ${skippedCount} completed session${skippedCount === 1 ? '' : 's'} had no saved round data.`
                 : 'No sessions needed syncing.';
-        setSyncMessage(resourceFailureCount
-            ? `${message} ${resourceFailureCount} resource download${resourceFailureCount === 1 ? '' : 's'} failed.`
-            : message);
+        const consentMessage = aiSkippedCount
+            ? ` AI analysis was not requested for ${aiSkippedCount} session${aiSkippedCount === 1 ? '' : 's'} because consent was off.`
+            : '';
+        const resourceGapMessage = resourceGapCount
+            ? ` No matching reviewed resources were available for ${resourceGapCount} session${resourceGapCount === 1 ? '' : 's'}.`
+            : '';
+        setSyncMessage(`${message}${consentMessage}${resourceGapMessage}${resourceFailureCount
+            ? ` ${resourceFailureCount} resource download${resourceFailureCount === 1 ? '' : 's'} failed.`
+            : ''}`);
         console.info('[DexPlay sync] completed', {
             uploaded_sessions: syncedCount,
             complete_reports: reportCount,
@@ -584,10 +742,11 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         return; await installPrompt.prompt(); await installPrompt.userChoice; onRefreshInstall(); };
     return <section className="page settings-page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'settings')}</p><h1>{localText(dict, 'settings')}</h1><p>{localText(dict, 'camera_privacy')}</p></div>
     <article className="panel settings-section"><h2>{localText(dict, 'language')}</h2><LanguageSelect value={language} onChange={onLanguage} label={localText(dict, 'therapist_language')}/><LanguageSelect value={profile.language} onChange={onProfileLanguage} label={localText(dict, 'patient_language')}/></article>
+    <article className="panel settings-section"><h2>Optional AI analysis consent · {profile.name}</h2><p>{aiConsentDescription(language)} Current provider: OpenAI.</p><label className="switch-row"><span>{aiConsent ? 'AI analysis enabled for this profile' : 'AI analysis off'}</span><input type="checkbox" checked={aiConsent} onChange={event => onAiConsent(event.target.checked)}/></label></article>
     <article className="panel settings-section"><h2>{localText(dict, 'theme')}</h2><label>{localText(dict, 'theme')}<select value={theme} onChange={event => onTheme(event.target.value)}><option value="child">{localText(dict, 'theme_child')}</option><option value="clinical">{localText(dict, 'theme_clinical')}</option><option value="senior">{localText(dict, 'theme_senior')}</option></select></label><label className="switch-row"><span>{localText(dict, 'high_contrast')}</span><input type="checkbox" checked={highContrast} onChange={event => onContrast(event.target.checked)}/></label><label className="switch-row"><span>{localText(dict, 'voice')}</span><input type="checkbox" checked={voice} onChange={event => onVoice(event.target.checked)}/></label></article>
     <article className="panel settings-section"><h2>{localText(dict, 'activate_key')}</h2>{apiKey ? <p className="success-text">✓ {localText(dict, 'key_active')}</p> : <form className="key-form" onSubmit={activate}><label>{localText(dict, 'key_placeholder')}<input value={keyInput} onChange={event => setKeyInput(event.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 12))} minLength={12} maxLength={12} autoComplete="off"/></label><button className="button primary" disabled={busy || keyInput.length !== 12}>{busy ? localText(dict, 'continue') : localText(dict, 'activate')}</button><button type="button" className="button secondary" onClick={() => void scanQr()} disabled={busy}>{scan ? 'Scanning…' : 'Scan QR'}</button></form>}{clinicKeys.length > 1 && <details><summary>Clinic patient access keys</summary>{clinicKeys.map(item => <div key={item.label} className="key-row"><span>{item.label}</span><code>{item.api_key}</code></div>)}</details>}{activationError && <p className="error-text" role="alert">{activationError}</p>}</article>
     <article className="panel settings-section"><h2>{localText(dict, 'subscription')}</h2><p>{localText(dict, 'report_locked')}</p>{paypalConfig ? <p className={`notice payment-mode ${paypalConfig.mode === 'sandbox' ? 'sandbox' : 'live'}`}><strong>{paypalConfig.mode === 'sandbox' ? 'SANDBOX — test transactions only; no real charges.' : 'LIVE — real payments.'}</strong>{!paypalConfig.enabled && ' Payments are not configured on this server.'}</p> : <p className="notice" role={paypalConfigError ? 'alert' : undefined}>{paypalConfigError || 'Checking payment environment…'}</p>}<label>{localText(dict, 'child_name')}<input value={phone} onChange={event => setPhone(event.target.value)} inputMode="tel" placeholder="+254…"/></label><label className="consent-check"><input type="checkbox" checked={smsConsent} onChange={event => setSmsConsent(event.target.checked)}/>{localText(dict, 'sms_optin')}</label><div className="plan-buttons"><button className="button secondary" disabled={busy || !online} onClick={() => void subscribe('individual')}>{localText(dict, 'individual_plan')}</button><button className="button primary" disabled={busy || !online} onClick={() => void subscribe('clinic')}>{localText(dict, 'clinic_plan')}</button></div>{!online && <p className="muted">Payment requires an internet connection.</p>}</article>
-    <article className="panel settings-section"><h2>{localText(dict, 'sync')}</h2><label>{localText(dict, 'queue')}<input type="time" value={reminderTime} onChange={event => onReminder(event.target.value)}/></label><button className="button secondary" onClick={() => void enableNotify()}>{notifyPermission === 'granted' ? 'Notifications enabled' : 'Enable daily reminders'}</button><p className="muted">Daily reminders can appear while this app is open. Push reminders require an active cloud account.</p><p className="muted">Sync uploads completed local sessions and saved profile details to generate subscriber reports and find available resources.</p><button className="button primary" disabled={busy || !online || !apiKey} onClick={() => void syncNow()}>{busy ? 'Syncing…' : localText(dict, 'sync')}</button>{syncMessage && <p className={syncError ? 'error-text' : 'success-text'} role={syncError ? 'alert' : 'status'}>{syncMessage}</p>}<div className="settings-inline"><button className="text-link" onClick={() => void exportData()}>{localText(dict, 'export')}</button><button className="text-link" onClick={() => window.print()}>{localText(dict, 'print')}</button></div>{apiKey && <button className="text-link danger-link" onClick={() => void deleteCloud()}>{localText(dict, 'delete_data')}</button>}</article>
+    <article className="panel settings-section"><h2>{localText(dict, 'sync')}</h2><label>{localText(dict, 'queue')}<input type="time" value={reminderTime} onChange={event => onReminder(event.target.value)}/></label><button className="button secondary" onClick={() => void enableNotify()}>{notifyPermission === 'granted' ? 'Notifications enabled' : 'Enable daily reminders'}</button><p className="muted">Daily reminders can appear while this app is open. Push reminders require an active cloud account. Sync stores encrypted session history; AI analysis runs only for profiles with separate AI consent.</p><button className="button primary" disabled={busy || !online || !apiKey} onClick={() => void syncNow()}>{busy ? 'Syncing…' : localText(dict, 'sync')}</button>{syncMessage && <p className={syncError ? 'error-text' : 'success-text'} role={syncError ? 'alert' : 'status'}>{syncMessage}</p>}<div className="settings-inline"><button className="text-link" onClick={() => void exportData()}>{localText(dict, 'export')}</button><button className="text-link" onClick={() => window.print()}>{localText(dict, 'print')}</button><button className="text-link" onClick={onResourceReview}>Open resource reviewer workflow</button></div>{apiKey && <button className="text-link danger-link" onClick={() => void deleteCloud()}>{localText(dict, 'delete_data')}</button>}</article>
     <article className="panel settings-section"><h2>DexPlay</h2><p>{localText(dict, 'offline')}</p><button className="button secondary" onClick={() => void install()} disabled={!installPrompt}>{installPrompt ? 'Install app' : 'Already installed or install unavailable'}</button><button className="text-link danger-link" onClick={() => void onDelete()}>{localText(dict, 'delete_data')} · this device</button></article>
   </section>;
 }
@@ -632,7 +791,37 @@ async function downloadResource(item, profileMatch) {
     }
     const cache = await caches.open('dexplay-resources');
     await cache.put(item.url, new Response(blob, { headers: { 'Content-Type': blob.type } }));
-    const metadata = { id: item.id, title: item.title, type: item.type, url: item.url, size_mb: Number((bytes / 1024 / 1024).toFixed(2)), downloaded_at: new Date().toISOString(), profile_match: profileMatch, language: item.language, sha256: item.sha256 };
+    const metadata = { id: item.id, title: item.title, type: item.type, url: item.url, size_mb: Number((bytes / 1024 / 1024).toFixed(2)), downloaded_at: new Date().toISOString(), profile_match: profileMatch, language: item.language, sha256: item.sha256, license: item.license, externally_sourced: false, clinic_recommended: item.clinic_recommended, clinic_approval_evidence: item.clinic_approval_evidence };
+    await (await db()).put('resource_cache', metadata);
+}
+async function saveResource(item, profileMatch) {
+    if (!item.externally_sourced)
+        return downloadResource(item, profileMatch);
+    const metadata = {
+        id: item.id,
+        title: item.title,
+        type: 'guide',
+        url: item.url,
+        size_mb: 0,
+        downloaded_at: new Date().toISOString(),
+        profile_match: profileMatch,
+        language: item.language || 'en',
+        externally_sourced: true,
+        source: item.source,
+        license: item.license,
+        access_status: item.access_status,
+        age_range: item.age_range,
+        mat_relevance: item.mat_relevance,
+        safety_notes: item.safety_notes,
+        review_notes: item.review_notes,
+        reviewer_role: item.reviewer_role,
+        reviewed_at: item.reviewed_at,
+        clinic_approval_evidence: item.clinic_approval_evidence,
+        discovered_at: item.discovered_at,
+        verified_at: item.verified_at,
+        link_status: item.link_status,
+        clinic_recommended: item.clinic_recommended,
+    };
     await (await db()).put('resource_cache', metadata);
 }
 async function removeResource(id) { const database = await db(), resource = await database.get('resource_cache', id); if (resource) {

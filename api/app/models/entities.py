@@ -58,6 +58,34 @@ class CuratedResource(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     license_label: Mapped[str] = mapped_column(String(160), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    clinic_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    clinic_approval_evidence: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+class ResourceCandidate(Base):
+    __tablename__ = "resource_candidates"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    link_status: Mapped[str] = mapped_column(String(80), default="not checked", nullable=False)
+    access_status: Mapped[str] = mapped_column(String(80), default="not reviewed", nullable=False)
+    license_info: Mapped[str] = mapped_column(String(500), default="not reviewed", nullable=False)
+    age_range: Mapped[str] = mapped_column(String(120), default="not reviewed", nullable=False)
+    mat_relevance: Mapped[str] = mapped_column(Text, default="not reviewed", nullable=False)
+    safety_notes: Mapped[str] = mapped_column(Text, default="not reviewed", nullable=False)
+    review_notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="candidate", nullable=False)
+    clinic_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    clinic_approval_evidence: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    reviewer_role: Mapped[str | None] = mapped_column(String(120))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class DiscoveryRun(Base):
+    __tablename__ = "resource_discovery_runs"
+    run_date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 class WebhookEvent(Base):
     __tablename__ = "paypal_webhook_events"

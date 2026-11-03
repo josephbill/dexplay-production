@@ -43,6 +43,7 @@ class FreeAnalysisRequest(BaseModel):
 
     session_data: list[AnalysisRound] = Field(min_length=1, max_length=10)
     profile: AnalysisProfile
+    ai_consent: Literal[True]
 
 class SyncRequest(BaseModel):
     session_data: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
@@ -51,6 +52,20 @@ class SyncRequest(BaseModel):
     usage_stats: dict[str, Any] = Field(default_factory=dict)
     resource_preferences: dict[str, Any] = Field(default_factory=dict)
     patient_id: str | None = Field(default=None, max_length=80)
+    ai_consent: bool = False
+
+class CandidateReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_status: Literal["free_public", "account_required", "paid", "unknown"]
+    license_info: str = Field(min_length=1, max_length=500)
+    age_range: str = Field(min_length=1, max_length=120)
+    mat_relevance: str = Field(min_length=1, max_length=1200)
+    safety_notes: str = Field(min_length=1, max_length=1200)
+    review_notes: str = Field(default="", max_length=1200)
+    link_verified: bool = False
+    clinic_approved: bool = False
+    clinic_approval_evidence: str = Field(default="", max_length=1200)
 
 class SubscriptionRequest(BaseModel):
     plan: Literal["individual", "clinic"]

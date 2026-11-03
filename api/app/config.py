@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     paypal_sandbox_webhook_id: str = ""
     paypal_sandbox_individual_plan_id: str = ""
     paypal_sandbox_clinic_plan_id: str = ""
+    resource_reviewer_token: str = ""
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
@@ -61,6 +62,13 @@ class Settings(BaseSettings):
     def valid_pepper(cls, value: str) -> str:
         if len(value.encode()) < 32:
             raise ValueError("API_KEY_PEPPER must contain at least 32 bytes")
+        return value
+
+    @field_validator("resource_reviewer_token")
+    @classmethod
+    def valid_reviewer_token(cls, value: str) -> str:
+        if value and len(value.encode()) < 32:
+            raise ValueError("RESOURCE_REVIEWER_TOKEN must contain at least 32 bytes when configured")
         return value
 
     @model_validator(mode="after")

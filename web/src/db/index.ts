@@ -3,9 +3,16 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 export interface Profile { id:string; name:string; age_years?:number; age_group:string; condition:string; hand:string; language:string; created_at:string; difficulty:Record<string,number|null>; }
 export interface Round { id:string; session_id:string; round_num:number; mode:string; objects_placed:number; objects_total:number; avg_time:number; fumbles:number; accuracy:number; }
 export interface Session { id:string; profile_id:string; patient_id?:string; started_at:string; ended_at?:string; difficulty_params:Record<string,number|null>; mode:string; }
-export interface ResourceMeta { id:string; title:string; type:'video'|'pdf'|'guide'; url:string; size_mb:number; downloaded_at:string; profile_match:string; language:string; sha256?:string; }
+export interface ResourceMeta {
+  id:string; title:string; type:'video'|'pdf'|'guide'; url:string; size_mb:number;
+  downloaded_at:string; profile_match:string; language:string; sha256?:string;
+  externally_sourced?:boolean; source?:string; license?:string; access_status?:string;
+  age_range?:string; mat_relevance?:string; safety_notes?:string; discovered_at?:string;
+  review_notes?:string; reviewer_role?:string; reviewed_at?:string; clinic_approval_evidence?:string;
+  verified_at?:string; link_status?:string; clinic_recommended?:boolean;
+}
 interface Store<T> { key:string; value:T; }
-interface QueuedSync { id:string; payload:Record<string,unknown>; timestamp:string; synced:boolean; }
+interface QueuedSync { id:string; payload:Record<string,unknown>; timestamp:string; synced:boolean; profile_id?:string; }
 interface DexPlayDB extends DBSchema {
   sessions: {key:string; value:Session; indexes:{'by-profile':string,'by-started':string}}
   rounds: {key:string; value:Round; indexes:{'by-session':string}}
@@ -46,8 +53,8 @@ export async function recentSessions(profileId?:string, limit=30) {
   const rows = profileId ? await database.getAllFromIndex('sessions','by-profile',profileId) : await database.getAll('sessions')
   return rows.sort((a,b)=>b.started_at.localeCompare(a.started_at)).slice(0,limit)
 }
-export async function queueSync(payload:Record<string,unknown>) {
-  const row:QueuedSync={id:crypto.randomUUID(),payload,timestamp:new Date().toISOString(),synced:false}
+export async function queueSync(payload:Record<string,unknown>, profileId?:string) {
+  const row:QueuedSync={id:crypto.randomUUID(),payload,timestamp:new Date().toISOString(),synced:false,profile_id:profileId}
   await (await db()).put('sync_queue',row)
   try { const registration=await navigator.serviceWorker.ready; if ('sync' in registration) await (registration as ServiceWorkerRegistration & {sync:{register:(tag:string)=>Promise<void>}}).sync.register('dexplay-session-sync') } catch { /* Network retry remains available from Settings. */ }
   return row.id

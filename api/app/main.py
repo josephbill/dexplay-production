@@ -2,23 +2,54 @@ from __future__ import annotations
 import asyncio, hashlib, hmac, logging, secrets, uuid
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+import httpx
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from phonenumbers import NumberParseException
 import phonenumbers
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from .agents import adaptive
 from .config import get_settings
 from .db import SessionLocal, get_db
-from .models import Account, ActivationClaim, CuratedResource, DeviceKey, SessionRecord, WebhookEvent
+from .models import (
+    Account,
+    ActivationClaim,
+    CuratedResource,
+    DeviceKey,
+    DiscoveryRun,
+    ResourceCandidate,
+    SessionRecord,
+    WebhookEvent,
+)
 from .models.entities import new_key
 from .orchestrator import orchestrate
-from .schemas import ClaimRequest, FreeAnalysisRequest, KeyActivationRequest, SubscriptionRequest, SyncRequest
+from .schemas import (
+    CandidateReviewRequest,
+    ClaimRequest,
+    FreeAnalysisRequest,
+    KeyActivationRequest,
+    SubscriptionRequest,
+    SyncRequest,
+)
+from typing import Literal
 from .security import decrypt_payload, encrypt_payload, generate_api_key, hash_api_key, hash_claim
+from .agents.privacy import (
+    provider_profile,
+    provider_resource_preferences,
+    provider_rounds,
+    provider_usage,
+)
 from .services.paypal import PayPalClient
+from .services.resource_discovery import (
+    age_range_matches,
+    candidate_id,
+    fetch_feed_candidates,
+    verify_candidate_link,
+)
 
 log = logging.getLogger("dexplay.api")
 settings = get_settings()
@@ -27,7 +58,8 @@ app = FastAPI(title="DexPlay Cloud API", version="1.0.0", docs_url=None if setti
 if not settings.cors_origins:
     raise RuntimeError("ALLOWED_ORIGINS must list the deployed PWA HTTPS origin")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Device-Key", "X-Request-ID"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-Device-Key", "X-Request-ID"],
     expose_headers=["X-Request-ID"])
 
 @app.middleware("http")
@@ -100,9 +132,12 @@ async def sync(request: Request, body: SyncRequest, auth=Depends(authenticated_d
     request_id = request.state.request_id
     device, account = auth
     session_id = str(body.session_data[-1].get("session_id") or body.patient_id or uuid.uuid4()) if body.session_data else str(body.patient_id or uuid.uuid4())
-    session_fingerprint = hashlib.sha256(session_id.encode()).hexdigest()[:12]
-    log.info("sync.started request_id=%s session_ref=%s rounds=%s profile_group=%s",
-             request_id, session_fingerprint, len(body.session_data), body.profile.get("group", "unknown"))
+    profile_group = body.profile.get("group", "unknown")
+    if profile_group not in ("child", "clinic"):
+        profile_group = "unknown"
+    log.info("sync.started request_id=%s rounds=%s profile_group=%s ai_consent=%s",
+             request_id, len(body.session_data), profile_group,
+             body.ai_consent)
     payload = {"session_data": body.session_data, "profile": body.profile, "patient_id": body.patient_id,
                "usage_stats": body.usage_stats, "synced_at": datetime.now(timezone.utc).isoformat()}
     record = await db.get(SessionRecord, session_id)
@@ -115,37 +150,72 @@ async def sync(request: Request, body: SyncRequest, auth=Depends(authenticated_d
     try:
         await db.commit()
     except Exception as exc:
-        log.error("sync.persist_failed request_id=%s session_ref=%s error_type=%s",
-                  request_id, session_fingerprint, type(exc).__name__)
+        log.error("sync.persist_failed request_id=%s error_type=%s",
+                  request_id, type(exc).__name__)
         raise
-    log.info("sync.persisted request_id=%s session_ref=%s action=%s",
-             request_id, session_fingerprint, "updated" if record else "created")
+    log.info("sync.persisted request_id=%s action=%s",
+             request_id, "updated" if record else "created")
+    if not body.ai_consent:
+        return {
+            "next_difficulty": None,
+            "report": {},
+            "new_resources": [],
+            "resource_gaps": [],
+            "partial": False,
+            "agents_unavailable": [],
+            "analysis_status": "AI analysis was not requested; consent is off. Session data was saved to the cloud.",
+            "ai_generated": False,
+            "difficulty_proposal_available": False,
+            "ai_skipped": True,
+        }
     try:
         count = await db.scalar(select(func.count()).select_from(SessionRecord).where(SessionRecord.account_id == account.id)) or 0
     except Exception as exc:
-        log.error("sync.account_session_count_failed request_id=%s session_ref=%s error_type=%s",
-                  request_id, session_fingerprint, type(exc).__name__)
+        log.error("sync.account_session_count_failed request_id=%s error_type=%s",
+                  request_id, type(exc).__name__)
         raise
-    usage = {**body.usage_stats, "free_sessions_count": max(int(body.usage_stats.get("free_sessions_count", 0)), count),
-             "reports_viewed": int(body.usage_stats.get("reports_viewed", 0))}
+    usage = provider_usage(body.usage_stats)
+    usage["free_sessions_count"] = max(usage["free_sessions_count"], count)
+    ai_rounds = provider_rounds(body.session_data)
+    ai_profile = provider_profile(body.profile)
     try:
-        result = await orchestrate(session_data=body.session_data, profile=body.profile,
+        result = await orchestrate(session_data=ai_rounds, profile=ai_profile,
             subscription_state=account.subscription_state, usage_stats=usage,
-            resource_preferences=body.resource_preferences,
-            progress_summary={"session_count": count,
-                "improvement_pct_30d": body.usage_stats.get("improvement_pct_30d", 0),
-                "condition": body.profile.get("condition")},
-            therapist_requested_reports=bool(body.usage_stats.get("therapist_requested_reports", False)),
+            resource_preferences=provider_resource_preferences(body.resource_preferences),
+            progress_summary={"session_count": count},
+            therapist_requested_reports=usage["therapist_requested_reports"],
             request_id=request_id)
     except Exception as exc:
-        log.error("sync.orchestration_failed request_id=%s session_ref=%s error_type=%s",
-                  request_id, session_fingerprint, type(exc).__name__)
+        log.error("sync.orchestration_failed request_id=%s error_type=%s",
+                  request_id, type(exc).__name__)
         raise
     audiences = [name for name, report in result.get("report", {}).items()
                  if isinstance(report, dict) and report.get("report_text")]
-    log.info("sync.analysis_complete request_id=%s session_ref=%s report_audiences=%s "
+    if result.get("partial"):
+        expected_audiences = {"parent", "therapist", "patient"}
+        missing_audiences = sorted(expected_audiences - set(audiences))
+        unavailable = result.get("agents_unavailable", [])
+        details = []
+        if missing_audiences:
+            details.append("missing report audiences: " + ", ".join(missing_audiences))
+        if unavailable:
+            details.append("unavailable components: " + ", ".join(unavailable))
+        result["analysis_status"] = "AI analysis is partial" + (
+            "; " + "; ".join(details) if details else ""
+        ) + "."
+    else:
+        result["analysis_status"] = "AI analysis completed."
+    result["ai_generated"] = (
+        "adaptive" not in result.get("agents_unavailable", [])
+        or bool(audiences)
+    )
+    result["difficulty_proposal_available"] = (
+        "adaptive" not in result.get("agents_unavailable", [])
+    )
+    result["ai_skipped"] = False
+    log.info("sync.analysis_complete request_id=%s report_audiences=%s "
              "partial=%s agents_unavailable=%s elapsed_ms=%s",
-             request_id, session_fingerprint, ",".join(audiences) or "none",
+             request_id, ",".join(audiences) or "none",
              result.get("partial", False), ",".join(result.get("agents_unavailable", [])) or "none",
              round((perf_counter() - started) * 1000))
     return result
@@ -197,7 +267,275 @@ async def analyze_free_session(body: FreeAnalysisRequest, request: Request):
         },
         "new_resources": [],
         "resource_gaps": [],
+        "analysis_status": "AI-generated brief session report and difficulty proposal.",
+        "ai_generated": True,
+        "difficulty_proposal_available": True,
+        "ai_skipped": False,
     }
+
+@app.get("/resources")
+async def public_resources(
+    age_group: Literal["4-6", "7-9", "10-12"] = "7-9",
+    language: str = Query(default="en", min_length=2, max_length=8),
+    db: AsyncSession = Depends(get_db),
+):
+    curated = (await db.execute(
+        select(CuratedResource).where(
+            CuratedResource.active.is_(True),
+            CuratedResource.language == language,
+        )
+    )).scalars().all()
+    curated_items = [
+        {
+            "id": item.id,
+            "title": item.title,
+            "type": item.resource_type,
+            "url": item.source_url,
+            "language": item.language,
+            "license": item.license_label,
+            "externally_sourced": False,
+            "clinic_recommended": item.clinic_approved,
+            "clinic_approval_evidence": item.clinic_approval_evidence,
+            "age_range": item.age_groups,
+            "mat_relevance": item.description,
+        }
+        for item in sorted(curated, key=lambda value: not value.clinic_approved)
+        if not item.age_groups or age_group.lower() in item.age_groups.lower()
+    ]
+    candidates = (await db.execute(
+        select(ResourceCandidate)
+        .where(
+            ResourceCandidate.status == "published",
+            ResourceCandidate.access_status == "free_public",
+        )
+        .order_by(ResourceCandidate.clinic_approved.desc(), ResourceCandidate.reviewed_at.desc())
+        .limit(100)
+    )).scalars().all()
+    external_items = [
+        {
+            "id": item.id,
+            "title": item.title,
+            "type": "guide",
+            "url": item.source_url,
+            "language": "en",
+            "license": item.license_info,
+            "externally_sourced": True,
+            "clinic_recommended": item.clinic_approved,
+            "clinic_approval_evidence": item.clinic_approval_evidence,
+            "source": item.source_name,
+            "discovered_at": item.discovered_at.isoformat(),
+            "verified_at": item.verified_at.isoformat() if item.verified_at else None,
+            "link_status": item.link_status,
+            "access_status": item.access_status,
+            "age_range": item.age_range,
+            "mat_relevance": item.mat_relevance,
+            "safety_notes": item.safety_notes,
+            "review_notes": item.review_notes,
+            "reviewer_role": item.reviewer_role,
+            "reviewed_at": item.reviewed_at.isoformat() if item.reviewed_at else None,
+        }
+        for item in candidates
+        if item.status == "published"
+        and item.access_status == "free_public"
+        and age_range_matches(item.age_range, age_group)
+    ]
+    resources = curated_items + external_items
+    resources.sort(key=lambda item: (not item["clinic_recommended"], item["externally_sourced"]))
+    return {"resources": resources}
+
+async def authenticated_resource_reviewer(
+    authorization: str | None = Header(default=None),
+) -> None:
+    reviewer_token = settings.resource_reviewer_token
+    if not reviewer_token:
+        raise HTTPException(503, "The protected resource review workflow is not configured.")
+    scheme, _, supplied = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, reviewer_token):
+        raise HTTPException(401, "A valid resource reviewer credential is required.")
+
+
+def serialize_candidate(candidate: ResourceCandidate) -> dict:
+    return {
+        "id": candidate.id,
+        "title": candidate.title,
+        "source": candidate.source_name,
+        "url": candidate.source_url,
+        "discovered_at": candidate.discovered_at.isoformat(),
+        "verified_at": candidate.verified_at.isoformat() if candidate.verified_at else None,
+        "link_status": candidate.link_status,
+        "access_status": candidate.access_status,
+        "license_info": candidate.license_info,
+        "age_range": candidate.age_range,
+        "mat_relevance": candidate.mat_relevance,
+        "safety_notes": candidate.safety_notes,
+        "review_notes": candidate.review_notes,
+        "status": candidate.status,
+        "clinic_approved": candidate.clinic_approved,
+        "clinic_approval_evidence": candidate.clinic_approval_evidence,
+        "reviewer_role": candidate.reviewer_role,
+        "reviewed_at": candidate.reviewed_at.isoformat() if candidate.reviewed_at else None,
+    }
+
+
+@app.get("/review/resources/candidates")
+async def list_resource_candidates(
+    _reviewer=Depends(authenticated_resource_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (await db.execute(
+        select(ResourceCandidate)
+        .where(ResourceCandidate.status == "candidate")
+        .order_by(ResourceCandidate.discovered_at.desc())
+        .limit(100)
+    )).scalars().all()
+    return {"candidates": [serialize_candidate(row) for row in rows]}
+
+
+@app.get("/review/resources/published")
+async def list_published_resources(
+    _reviewer=Depends(authenticated_resource_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (await db.execute(
+        select(ResourceCandidate)
+        .where(ResourceCandidate.status == "published")
+        .order_by(ResourceCandidate.reviewed_at.desc())
+        .limit(200)
+    )).scalars().all()
+    return {"resources": [serialize_candidate(row) for row in rows]}
+
+
+@app.post("/review/resources/discover")
+async def discover_resources(
+    request: Request,
+    _reviewer=Depends(authenticated_resource_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    today = datetime.now(timezone.utc).date().isoformat()
+    await db.execute(
+        pg_insert(DiscoveryRun)
+        .values(run_date=today, request_count=0)
+        .on_conflict_do_nothing(index_elements=[DiscoveryRun.run_date])
+    )
+    run_result = await db.execute(
+        update(DiscoveryRun)
+        .where(DiscoveryRun.run_date == today, DiscoveryRun.request_count < 10)
+        .values(request_count=DiscoveryRun.request_count + 1)
+        .returning(DiscoveryRun.request_count)
+    )
+    daily_count = run_result.scalar_one_or_none()
+    if daily_count is None:
+        raise HTTPException(429, "The approved-source discovery limit of 10 requests per day was reached.")
+    await db.commit()
+    try:
+        feed_items = (await fetch_feed_candidates())[:10]
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("resource.discovery_failed request_id=%s error_type=%s",
+                  request.state.request_id, type(exc).__name__)
+        raise HTTPException(502, "The approved OT Toolbox feed is temporarily unavailable.") from exc
+
+    added, existing = [], set()
+    for index, item in enumerate(feed_items):
+        existing_row = (await db.execute(
+            select(ResourceCandidate).where(ResourceCandidate.source_url == item["url"])
+        )).scalar_one_or_none()
+        if existing_row:
+            existing.add(item["url"])
+            continue
+        if index < 5:
+            link_status, checked_at = await verify_candidate_link(item["url"])
+        else:
+            link_status, checked_at = "not checked", None
+        candidate = ResourceCandidate(
+            id=candidate_id(item["url"]),
+            title=item["title"],
+            source_name=item["publisher"][:160],
+            source_url=item["url"],
+            discovered_at=datetime.now(timezone.utc),
+            verified_at=checked_at,
+            link_status=link_status,
+            access_status="not reviewed",
+            license_info="not reviewed",
+            age_range="not reviewed",
+            mat_relevance="not reviewed",
+            safety_notes="not reviewed",
+            review_notes="",
+            status="candidate",
+        )
+        db.add(candidate)
+        added.append(candidate)
+    await db.commit()
+    log.info("resource.discovery_completed request_id=%s added=%s duplicates=%s",
+             request.state.request_id, len(added), len(existing))
+    return {
+        "added": [serialize_candidate(item) for item in added],
+        "duplicates_skipped": len(existing),
+        "daily_requests_used": daily_count,
+        "daily_request_limit": 10,
+        "sources": [
+            {"source": "The OT Toolbox", "status": "feed queried"},
+            {
+                "source": "Physio-Pedia",
+                "status": "discovery deferred; its public sitemap returned 403 during review",
+            },
+        ],
+    }
+
+
+@app.post("/review/resources/candidates/{candidate_id}/approve")
+async def approve_resource_candidate(
+    candidate_id: str,
+    body: CandidateReviewRequest,
+    _reviewer=Depends(authenticated_resource_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    candidate = await db.get(ResourceCandidate, candidate_id, with_for_update=True)
+    if not candidate or candidate.status != "candidate":
+        raise HTTPException(404, "Pending resource candidate not found.")
+    if body.access_status != "free_public":
+        raise HTTPException(422, "Only resources explicitly reviewed as free and publicly accessible can be published.")
+    if not all(
+        value.strip()
+        for value in (body.license_info, body.age_range, body.mat_relevance, body.safety_notes)
+    ):
+        raise HTTPException(422, "License, age range, mat relevance, and safety notes must all be completed.")
+    if candidate.link_status != "HTTP 200" and not body.review_notes.strip():
+        raise HTTPException(422, "Add review notes explaining how the link was verified because automated verification was inconclusive.")
+    if body.clinic_approved and not body.clinic_approval_evidence.strip():
+        raise HTTPException(422, "Record the explicit clinic approval evidence before marking this resource clinic-approved.")
+    if candidate.link_status != "HTTP 200" and body.link_verified:
+        candidate.link_status = f"manual verification; prior check: {candidate.link_status}"[:80]
+        candidate.verified_at = datetime.now(timezone.utc)
+    candidate.access_status = body.access_status
+    candidate.license_info = body.license_info.strip()
+    candidate.age_range = body.age_range.strip()
+    candidate.mat_relevance = body.mat_relevance.strip()
+    candidate.safety_notes = body.safety_notes.strip()
+    candidate.review_notes = body.review_notes.strip()
+    candidate.clinic_approved = body.clinic_approved
+    candidate.clinic_approval_evidence = body.clinic_approval_evidence.strip()
+    candidate.status = "published"
+    candidate.reviewer_role = "Designated DexPlay content reviewer"
+    candidate.reviewed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"resource": serialize_candidate(candidate)}
+
+
+@app.post("/review/resources/candidates/{candidate_id}/reject")
+async def reject_resource_candidate(
+    candidate_id: str,
+    _reviewer=Depends(authenticated_resource_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    candidate = await db.get(ResourceCandidate, candidate_id, with_for_update=True)
+    if not candidate or candidate.status != "candidate":
+        raise HTTPException(404, "Pending resource candidate not found.")
+    candidate.status = "rejected"
+    candidate.review_notes = "Rejected by designated DexPlay content reviewer."
+    candidate.reviewer_role = "Designated DexPlay content reviewer"
+    candidate.reviewed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"resource": serialize_candidate(candidate)}
 
 @app.get("/paypal/config")
 async def paypal_config():

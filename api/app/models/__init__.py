@@ -1,3 +1,21 @@
-from .entities import Account, ActivationClaim, CuratedResource, DeviceKey, SessionRecord, WebhookEvent
+from .entities import (
+    Account,
+    ActivationClaim,
+    CuratedResource,
+    DeviceKey,
+    DiscoveryRun,
+    ResourceCandidate,
+    SessionRecord,
+    WebhookEvent,
+)
 
-__all__ = ["Account", "ActivationClaim", "DeviceKey", "SessionRecord", "CuratedResource", "WebhookEvent"]
+__all__ = [
+    "Account",
+    "ActivationClaim",
+    "CuratedResource",
+    "DeviceKey",
+    "DiscoveryRun",
+    "ResourceCandidate",
+    "SessionRecord",
+    "WebhookEvent",
+]

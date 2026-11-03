@@ -34,6 +34,7 @@ def valid_request() -> dict:
             "difficulty": {"object_size_mm": 22},
             "recent_session_accuracy": [0.5, 0.75],
         },
+        "ai_consent": True,
     }
 
 
@@ -54,6 +55,13 @@ class FreeAnalysisSchemaTests(unittest.TestCase):
     def test_rejects_invalid_accuracy(self) -> None:
         values = valid_request()
         values["session_data"][0]["accuracy"] = 1.5
+
+        with self.assertRaises(ValidationError):
+            FreeAnalysisRequest.model_validate(values)
+
+    def test_requires_explicit_ai_consent(self) -> None:
+        values = valid_request()
+        values["ai_consent"] = False
 
         with self.assertRaises(ValidationError):
             FreeAnalysisRequest.model_validate(values)

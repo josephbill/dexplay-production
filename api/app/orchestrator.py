@@ -11,7 +11,7 @@ log = logging.getLogger("dexplay.orchestrator")
 def _fallback(profile: dict, session_data: list[dict]) -> dict:
     current = profile.get("difficulty", {})
     return {"next_difficulty": {"object_size_mm": current.get("object_size_mm", 22),
-        "time_limit_s": None if profile.get("condition") == "parkinsons" else current.get("time_limit_s", 75),
+        "time_limit_s": current.get("time_limit_s", 75),
         "objects_count": current.get("objects_count", 5), "zone_size_mm": current.get("zone_size_mm", 80),
         "speed_factor": current.get("speed_factor", 1), "rationale": "Cloud coaching is temporarily unavailable; keep the saved safe difficulty."},
         "report": {}, "flag": None,
@@ -52,8 +52,9 @@ async def orchestrate(*, session_data: list[dict], profile: dict, subscription_s
             progress_summary={**progress_summary, "session_data": session_data},
             subscription_state=subscription_state, profile=profile,
             therapist_requested_reports=therapist_requested_reports), request_id)),
-        "resource": asyncio.create_task(_run_one("resource", _run_resource(profile, resource_preferences, {"session_data": session_data,
-            "improvement_trend": usage_stats.get("improvement_trend", "unknown")}), request_id)),
+        "resource": asyncio.create_task(_run_one("resource", _run_resource(
+            profile, resource_preferences, {"mode": session_data[-1].get("mode", "sort_place") if session_data else "sort_place"}
+        ), request_id)),
     }
     done, pending = await asyncio.wait(tasks.values(), timeout=10)
     unavailable = []

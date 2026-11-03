@@ -10,15 +10,17 @@ async def generate_report(*, session_data: list[dict], profile: dict, audience: 
     points = [r for r in session_data if isinstance(r, dict)]
     start = points[0] if points else {}
     end = points[-1] if points else {}
-    facts = {"round_count": len(points), "start_accuracy": start.get("accuracy"),
+    facts = {"round_count": len(points), "mode": end.get("mode"),
+             "start_accuracy": start.get("accuracy"),
              "end_accuracy": end.get("accuracy"), "start_time_sec": start.get("avg_time"),
-             "end_time_sec": end.get("avg_time"), "profile": profile, "audience": audience,
+             "end_time_sec": end.get("avg_time"),
+             "profile": {key: profile[key] for key in ("group", "age_group", "language") if key in profile},
+             "audience": audience,
              "period": period, "context": context}
     system = ("You write DexPlay progress reports for children, caregivers, and occupational therapists. "
               f"Write directly in {language}. Use culturally respectful wording and the audience's tone: "
               "parent warm and simple, therapist concise and clinical, patient encouraging. Never diagnose, "
-              "invent measurements, guarantee recovery, or call a child a failure. For Parkinson's, emphasize "
-              "stability and comfort, never speed. Return your report by calling the required tool.")
+              "invent measurements, guarantee recovery, or call a child a failure. Return your report by calling the required tool.")
     if context == "brief":
         system += " Keep this free-user report to one or two short sentences: state the measured session result and add brief encouragement. Do not include treatment advice or recommendations."
     def deliver(args: dict) -> dict:
