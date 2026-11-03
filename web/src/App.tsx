@@ -319,6 +319,33 @@ function ClinicScreen({ profile, patients, dict, onSwitch, onAdd, onPlay }) {
   </section>;
 }
 function PatientRow({ profile, count, onClick }) { const [last, setLast] = useState(null); useEffect(() => { void recentSessions(profile.id, 1).then(rows => setLast(rows[0] ?? null)); }, [profile.id, count]); return <button className="patient-row" onClick={onClick}><strong>{profile.name}</strong><span>{profile.age_years}</span><span>{profile.condition || '—'}</span><span>{count}</span><span>{last ? new Date(last.started_at).toLocaleDateString() : '—'}</span></button>; }
+// function ReportsScreen({ profile, dict, cloudReport, analysisStatus, difficultyProposal, onDifficultyAccept, onDifficultyDecline, apiKey, onPrint, onPlay, onSettings }) {
+//     const [sessions, setSessions] = useState([]), [rounds, setRounds] = useState([]);
+//     useEffect(() => { void (async () => { const rows = await recentSessions(profile.id, 200); setSessions(rows); if (rows[0]) {
+//         const all = await (await db()).getAllFromIndex('rounds', 'by-session', rows[0].id);
+//         setRounds(all);
+//         const saved = await getSetting(`report:${rows[0].id}`, null);
+//         if (saved)
+//             setCloudReportSafe(saved);
+//     } })(); }, [profile.id]);
+//     const [storedReport, setStoredReport] = useState(cloudReport);
+//     const setCloudReportSafe = (value) => setStoredReport(value);
+//     const hasReportContent = (report) => Boolean(report && ['parent', 'therapist', 'patient'].some(audience => report[audience]?.report_text));
+//     const chosen = [cloudReport, storedReport].find(hasReportContent);
+//     const hasReport = Boolean(chosen);
+//     const average = rounds.length ? Math.round(rounds.reduce((sum, row) => sum + row.accuracy, 0) / rounds.length * 100) : 0;
+//     const placed = rounds.reduce((sum, row) => sum + row.objects_placed, 0);
+//     const total = rounds.reduce((sum, row) => sum + row.objects_total, 0);
+//     const fumbles = rounds.reduce((sum, row) => sum + row.fumbles, 0);
+//     const averageTime = rounds.length ? (rounds.reduce((sum, row) => sum + row.avg_time, 0) / rounds.length).toFixed(1) : '0.0';
+//     return <section className="page report-page"><div className="page-heading report-intro"><p className="eyebrow">{localText(dict, 'reports')}</p><h1>{localText(dict, 'reports')}</h1><p>{profile.name} · {sessions.length} {localText(dict, 'total_sessions')}</p><button className="button primary" onClick={onPlay}>{localText(dict, 'start')}</button></div>
+//     <article className="panel report-summary"><h2>Measured game results</h2><p>Recorded on this device from the completed color-sorting rounds.</p><div className="stat-grid report-metrics"><div className="stat-card report-metric"><small>Pieces placed</small><strong>{placed}/{total}</strong></div><div className="stat-card report-metric"><small>Round accuracy</small><strong>{average}%</strong></div><div className="stat-card report-metric"><small>Average seconds per piece</small><strong>{averageTime}</strong></div><div className="stat-card report-metric"><small>Misplacements</small><strong>{fumbles}</strong></div></div>{rounds.length > 0 && <div className="recent-list"><h3>Round details</h3>{rounds.map(row => <p className="report-round" key={row.id}>Round {row.round_num}: {row.objects_placed}/{row.objects_total} placed · {Math.round(row.accuracy * 100)}% · {row.avg_time}s per piece · {row.fumbles} misplacements</p>)}</div>}</article>
+//     {analysisStatus && <p className="notice" role="status">{analysisStatus}</p>}
+//     {difficultyProposal && <DifficultyProposal proposal={difficultyProposal} onAccept={onDifficultyAccept} onDecline={onDifficultyDecline}/>}
+//     {hasReport ? <><div className="report-actions"><button className="button primary" onClick={onPrint}>{localText(dict, 'print')}</button></div><div className="print-report"><div className="report-title report-reveal"><h2>AI-generated DexPlay game feedback · {profile.name}</h2><p>Based on the measurements above. General activity feedback only—not diagnosis, therapy, or individualized clinical advice.</p></div>{chosen.parent?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'parent')}</h3><p>{chosen.parent.report_text}</p></article>}{chosen.therapist?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'therapist')}</h3><p>{chosen.therapist.report_text}</p></article>}{chosen.patient?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'patient')}</h3><p>{chosen.patient.report_text}</p></article>}</div></> : <article className="panel report-lock"><span className="lock-icon">{apiKey ? '☁' : '🔒'}</span><h2>AI report not available</h2><p>{analysisStatus || (apiKey ? 'Cloud reports are available after consented analysis and successful sync.' : 'AI reports require your separate, optional consent in Settings.')}</p><p>Your local measurements and session history remain available without cloud AI.</p>{apiKey && <button className="button secondary" onClick={onSettings}>{localText(dict, 'settings')}</button>}</article>}
+//     <div className="panel recent-list report-recent"><h2>{localText(dict, 'recent_sessions')}</h2>{sessions.slice(0, 10).map(session => <div className="recent-row report-session-row" key={session.id}><span>{new Date(session.started_at).toLocaleString(languageLocale(profile.language))}</span><span>{session.mode}</span></div>)}</div>
+//   </section>;
+// }
 function ReportsScreen({ profile, dict, cloudReport, analysisStatus, difficultyProposal, onDifficultyAccept, onDifficultyDecline, apiKey, onPrint, onPlay, onSettings }) {
     const [sessions, setSessions] = useState([]), [rounds, setRounds] = useState([]);
     useEffect(() => { void (async () => { const rows = await recentSessions(profile.id, 200); setSessions(rows); if (rows[0]) {
@@ -338,13 +365,288 @@ function ReportsScreen({ profile, dict, cloudReport, analysisStatus, difficultyP
     const total = rounds.reduce((sum, row) => sum + row.objects_total, 0);
     const fumbles = rounds.reduce((sum, row) => sum + row.fumbles, 0);
     const averageTime = rounds.length ? (rounds.reduce((sum, row) => sum + row.avg_time, 0) / rounds.length).toFixed(1) : '0.0';
-    return <section className="page report-page"><div className="page-heading report-intro"><p className="eyebrow">{localText(dict, 'reports')}</p><h1>{localText(dict, 'reports')}</h1><p>{profile.name} · {sessions.length} {localText(dict, 'total_sessions')}</p><button className="button primary" onClick={onPlay}>{localText(dict, 'start')}</button></div>
-    <article className="panel report-summary"><h2>Measured game results</h2><p>Recorded on this device from the completed color-sorting rounds.</p><div className="stat-grid report-metrics"><div className="stat-card report-metric"><small>Pieces placed</small><strong>{placed}/{total}</strong></div><div className="stat-card report-metric"><small>Round accuracy</small><strong>{average}%</strong></div><div className="stat-card report-metric"><small>Average seconds per piece</small><strong>{averageTime}</strong></div><div className="stat-card report-metric"><small>Misplacements</small><strong>{fumbles}</strong></div></div>{rounds.length > 0 && <div className="recent-list"><h3>Round details</h3>{rounds.map(row => <p className="report-round" key={row.id}>Round {row.round_num}: {row.objects_placed}/{row.objects_total} placed · {Math.round(row.accuracy * 100)}% · {row.avg_time}s per piece · {row.fumbles} misplacements</p>)}</div>}</article>
-    {analysisStatus && <p className="notice" role="status">{analysisStatus}</p>}
-    {difficultyProposal && <DifficultyProposal proposal={difficultyProposal} onAccept={onDifficultyAccept} onDecline={onDifficultyDecline}/>}
-    {hasReport ? <><div className="report-actions"><button className="button primary" onClick={onPrint}>{localText(dict, 'print')}</button></div><div className="print-report"><div className="report-title report-reveal"><h2>AI-generated DexPlay game feedback · {profile.name}</h2><p>Based on the measurements above. General activity feedback only—not diagnosis, therapy, or individualized clinical advice.</p></div>{chosen.parent?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'parent')}</h3><p>{chosen.parent.report_text}</p></article>}{chosen.therapist?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'therapist')}</h3><p>{chosen.therapist.report_text}</p></article>}{chosen.patient?.report_text && <article className="report-copy report-reveal"><h3>{localText(dict, 'patient')}</h3><p>{chosen.patient.report_text}</p></article>}</div></> : <article className="panel report-lock"><span className="lock-icon">{apiKey ? '☁' : '🔒'}</span><h2>AI report not available</h2><p>{analysisStatus || (apiKey ? 'Cloud reports are available after consented analysis and successful sync.' : 'AI reports require your separate, optional consent in Settings.')}</p><p>Your local measurements and session history remain available without cloud AI.</p>{apiKey && <button className="button secondary" onClick={onSettings}>{localText(dict, 'settings')}</button>}</article>}
-    <div className="panel recent-list report-recent"><h2>{localText(dict, 'recent_sessions')}</h2>{sessions.slice(0, 10).map(session => <div className="recent-row report-session-row" key={session.id}><span>{new Date(session.started_at).toLocaleString(languageLocale(profile.language))}</span><span>{session.mode}</span></div>)}</div>
-  </section>;
+
+    return (
+    <section className="page report-page dex-reports-container">
+        
+        {/* Playful Header */}
+        <div className="page-heading report-intro dex-header">
+            <p className="eyebrow">{localText(dict, 'reports')} 🏆</p>
+            <h1 className="dex-float">{localText(dict, 'reports')}</h1>
+            <p>{profile.name} · {sessions.length} {localText(dict, 'total_sessions')} 🌟</p>
+            <button className="button primary dex-bounce-btn" onClick={onPlay}>{localText(dict, 'start')} ▶️</button>
+        </div>
+
+        {/* Fun Stats Cards */}
+        <article className="panel report-summary dex-panel">
+            <h2>🎮 Your Awesome Game Results</h2>
+            <p>Look at what you did on this device during the color-sorting game!</p>
+            
+            <div className="stat-grid report-metrics dex-stat-grid">
+                <div className="stat-card report-metric dex-pop" style={{ animationDelay: '0.1s', backgroundColor: '#ffe0b2' }}>
+                    <small>🧩 <span className="dex-term" data-tech="Objects Placed">Pieces placed</span></small>
+                    <strong>{placed}/{total}</strong>
+                </div>
+                <div className="stat-card report-metric dex-pop" style={{ animationDelay: '0.2s', backgroundColor: '#c8e6c9' }}>
+                    <small>🎯 <span className="dex-term" data-tech="Round Accuracy">Round accuracy</span></small>
+                    <strong>{average}%</strong>
+                </div>
+                <div className="stat-card report-metric dex-pop" style={{ animationDelay: '0.3s', backgroundColor: '#d1c4e9' }}>
+                    <small>⏱️ <span className="dex-term" data-tech="Average Seconds per Piece">Seconds per piece</span></small>
+                    <strong>{averageTime}s</strong>
+                </div>
+                <div className="stat-card report-metric dex-pop" style={{ animationDelay: '0.4s', backgroundColor: '#ffcdd2' }}>
+                    <small>🤪 <span className="dex-term" data-tech="Misplacements (Fumbles)">Oopsie Drops</span></small>
+                    <strong>{fumbles}</strong>
+                </div>
+            </div>
+
+            {rounds.length > 0 && (
+                <div className="recent-list dex-round-details">
+                    <h3>📝 Round Details</h3>
+                    {rounds.map((row, index) => {
+                        const accPercent = Math.round(row.accuracy * 100);
+                        return (
+                            <div className="dex-round-row dex-fade-up" style={{ animationDelay: `${0.5 + (index * 0.1)}s` }} key={row.id}>
+                                <span className="dex-round-num">Round {row.round_num}</span>
+                                <div className="dex-progress-bar-container">
+                                    <div className="dex-progress-bar" style={{ width: `${accPercent}%`, backgroundColor: accPercent > 70 ? '#2e7d32' : accPercent > 40 ? '#e65100' : '#c62828' }}></div>
+                                </div>
+                                <span className="dex-round-text">{row.objects_placed}/{row.objects_total} placed · {accPercent}% · {row.avg_time}s per piece · {row.fumbles} drops</span>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </article>
+
+        {analysisStatus && <p className="notice dex-notice" role="status">✨ {analysisStatus}</p>}
+        {difficultyProposal && <DifficultyProposal proposal={difficultyProposal} onAccept={onDifficultyAccept} onDecline={onDifficultyDecline}/>}
+
+        {/* AI Reports Section */}
+        {hasReport ? (
+            <>
+                <div className="report-actions">
+                    <button className="button primary dex-print-btn" onClick={onPrint}>🖨️ {localText(dict, 'print')}</button>
+                </div>
+                <div className="print-report dex-print-report">
+                    <div className="report-title report-reveal dex-fade-up">
+                        <h2>🪄 AI Magic Feedback for {profile.name}</h2>
+                        <p className="dex-disclaimer">Based on the measurements above. General activity feedback only—not diagnosis, therapy, or individualized clinical advice.</p>
+                    </div>
+                    
+                    {chosen.parent?.report_text && (
+                        <article className="report-copy report-reveal dex-fade-up dex-card-parent" style={{ animationDelay: '0.2s' }}>
+                            <h3>👨🏿‍👩🏿‍👧🏿 {localText(dict, 'parent')}</h3>
+                            <p>{chosen.parent.report_text}</p>
+                        </article>
+                    )}
+                    {chosen.therapist?.report_text && (
+                        <article className="report-copy report-reveal dex-fade-up dex-card-therapist" style={{ animationDelay: '0.4s' }}>
+                            <h3>🧑🏿‍⚕️ {localText(dict, 'therapist')}</h3>
+                            <p>{chosen.therapist.report_text}</p>
+                        </article>
+                    )}
+                    {chosen.patient?.report_text && (
+                        <article className="report-copy report-reveal dex-fade-up dex-card-patient" style={{ animationDelay: '0.6s' }}>
+                            <h3>🧒🏿 {localText(dict, 'patient')}</h3>
+                            <p>{chosen.patient.report_text}</p>
+                        </article>
+                    )}
+                </div>
+            </>
+        ) : (
+            <article className="panel report-lock dex-lock-panel dex-fade-up">
+                <span className="lock-icon dex-float">{apiKey ? '☁️' : '🔒'}</span>
+                <h2>AI Magic Not Available Yet</h2>
+                <p>{analysisStatus || (apiKey ? 'Cloud reports are available after consented analysis and successful sync.' : 'AI reports require your separate, optional consent in Settings.')}</p>
+                <p>But don't worry! Your local measurements and session history are still safe and sound here.</p>
+                {apiKey && <button className="button secondary" onClick={onSettings}>{localText(dict, 'settings')} ⚙️</button>}
+            </article>
+        )}
+
+        {/* Recent Sessions */}
+        <div className="panel recent-list report-recent dex-fade-up">
+            <h2>📅 {localText(dict, 'recent_sessions')}</h2>
+            {sessions.slice(0, 10).map((session, index) => (
+                <div className="recent-row report-session-row dex-session-row" key={session.id} style={{ animationDelay: `${index * 0.05}s` }}>
+                    <span>🕒 {new Date(session.started_at).toLocaleString(languageLocale(profile.language))}</span>
+                    <span className="dex-badge">{session.mode}</span>
+                </div>
+            ))}
+        </div>
+
+        {/* --- ANIMATION & TOOLTIP STYLES --- */}
+        <style>{`
+            .dex-reports-container {
+                font-family: 'Nunito', 'Segoe UI', sans-serif;
+                color: #3e2723; /* Warmer dark brown text for readability on warm backgrounds */
+            }
+            .dex-header h1 {
+                color: #4e342e;
+                font-size: 2.5rem;
+                margin-bottom: 0.5rem;
+            }
+            .dex-panel {
+                border-radius: 20px;
+                box-shadow: 0 8px 20px rgba(78, 52, 46, 0.08);
+                border: 2px solid #ffcc80;
+                background: #fffaf5;
+            }
+            
+            /* --- TOOLTIP STYLING --- */
+            .dex-term {
+                position: relative;
+                cursor: help;
+                border-bottom: 2px dotted #795548;
+                color: inherit;
+            }
+            .dex-term::after {
+                content: attr(data-tech);
+                position: absolute;
+                bottom: 120%;
+                left: 50%;
+                transform: translateX(-50%) translateY(10px);
+                background-color: #4e342e;
+                color: #fff;
+                text-align: center;
+                padding: 6px 12px;
+                border-radius: 8px;
+                font-size: 0.8rem;
+                font-weight: normal;
+                white-space: nowrap;
+                opacity: 0;
+                visibility: hidden;
+                transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                z-index: 10;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            }
+            .dex-term::before {
+                content: '';
+                position: absolute;
+                bottom: 100%;
+                left: 50%;
+                margin-left: -6px;
+                border-width: 6px;
+                border-style: solid;
+                border-color: #4e342e transparent transparent transparent;
+                opacity: 0;
+                visibility: hidden;
+                transition: all 0.2s;
+                z-index: 10;
+            }
+            .dex-term:hover::after {
+                opacity: 1;
+                visibility: visible;
+                transform: translateX(-50%) translateY(0);
+            }
+            .dex-term:hover::before {
+                opacity: 1;
+                visibility: visible;
+            }
+
+            /* Stat Cards */
+            .dex-stat-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 15px;
+                margin-top: 20px;
+            }
+            .dex-stat-card {
+                border-radius: 16px;
+                padding: 15px;
+                text-align: center;
+                border: 2px solid rgba(0,0,0,0.05);
+                transition: transform 0.2s ease;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            }
+            .dex-stat-card:hover {
+                transform: scale(1.05) rotate(2deg);
+            }
+            .dex-stat-card strong {
+                font-size: 1.8rem;
+                color: #3e2723;
+                display: block;
+                margin-top: 5px;
+            }
+            
+            /* Round Details */
+            .dex-round-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px;
+                background: #fdf3e7;
+                border-radius: 10px;
+                margin-bottom: 8px;
+                flex-wrap: wrap;
+            }
+            .dex-round-num { font-weight: bold; min-width: 60px; color: #4e342e; }
+            .dex-progress-bar-container {
+                flex-grow: 1;
+                background: #e0d6cf;
+                height: 12px;
+                border-radius: 6px;
+                overflow: hidden;
+                min-width: 100px;
+            }
+            .dex-progress-bar { height: 100%; border-radius: 6px; transition: width 1s ease-in-out; }
+            .dex-round-text { font-size: 0.9em; color: #5d4037; }
+
+            /* AI Cards - Warm African-inspired tones */
+            .dex-card-parent { background: #fff8e1; border-left: 8px solid #f9a825; padding: 15px; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(249,168,37,0.1); }
+            .dex-card-therapist { background: #e8f5e9; border-left: 8px solid #2e7d32; padding: 15px; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(46,125,50,0.1); }
+            .dex-card-patient { background: #fbe9e7; border-left: 8px solid #d84315; padding: 15px; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(216,67,21,0.1); }
+            .dex-card-parent h3, .dex-card-therapist h3, .dex-card-patient h3 { margin-top: 0; }
+            
+            .dex-print-btn {
+                background-color: #e65100 !important;
+                color: white;
+                border-radius: 20px;
+                font-weight: bold;
+                transition: all 0.2s ease;
+            }
+            .dex-print-btn:hover {
+                background-color: #bf360c !important;
+                transform: scale(1.05);
+            }
+
+            .dex-badge {
+                background: #ffcc80;
+                color: #4e342e;
+                padding: 4px 10px;
+                border-radius: 12px;
+                font-size: 0.8rem;
+                font-weight: bold;
+            }
+            .dex-session-row { transition: background 0.2s; border-radius: 8px; }
+            .dex-session-row:hover { background: #fdf3e7; }
+
+            /* Animations */
+            .dex-pop { animation: dexPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) both; }
+            @keyframes dexPop {
+                0% { transform: scale(0.8); opacity: 0; }
+                100% { transform: scale(1); opacity: 1; }
+            }
+            .dex-fade-up { animation: dexFadeUp 0.6s ease-out both; }
+            @keyframes dexFadeUp {
+                0% { transform: translateY(20px); opacity: 0; }
+                100% { transform: translateY(0); opacity: 1; }
+            }
+            .dex-float { animation: dexFloat 3s ease-in-out infinite; }
+            @keyframes dexFloat {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-8px); }
+            }
+            .dex-bounce-btn { border-radius: 20px; animation: dexBounce 2s infinite; }
+            @keyframes dexBounce {
+                0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+                40% { transform: translateY(-5px); }
+                60% { transform: translateY(-3px); }
+            }
+        `}</style>
+    </section>
+    );
 }
 function DifficultyProposal({ proposal, onAccept, onDecline }) {
     const [draft, setDraft] = useState({ ...proposal });
