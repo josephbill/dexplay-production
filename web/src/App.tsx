@@ -563,28 +563,57 @@ function ResourceReviewScreen({ onBack }) {
         <p>{localText(dict, 'review_queue_description')}</p>
         <button className="button secondary" onClick={onBack}>{localText(dict, 'back_to_settings')}</button>
       </div>
-      <article className="panel settings-section">
-        <h2>{localText(dict, 'reviewer_access')}</h2>
-        <p>{localText(dict, 'reviewer_access_description')}</p>
-        <label>{localText(dict, 'reviewer_credential')}<input type="password" autoComplete="off" value={token} onChange={event => setToken(event.target.value)}/></label>
-        <div className="form-actions">
-          <button className="button secondary" disabled={busy || !token} onClick={() => void loadQueue()}>{localText(dict, 'review_queue_load')}</button>
-          <button className="button primary" disabled={busy || !token} onClick={() => void discover()}>{localText(dict, 'review_discover')}</button>
+      <article className="panel review-access-panel">
+        <div className="review-access-heading">
+          <span className="review-access-icon" aria-hidden="true">🔐</span>
+          <div>
+            <h2>{localText(dict, 'reviewer_access')}</h2>
+            <p>{localText(dict, 'reviewer_access_description')}</p>
+          </div>
+        </div>
+        <label className="review-credential-field">
+          {localText(dict, 'reviewer_credential')}
+          <input type="password" autoComplete="off" value={token} onChange={event => setToken(event.target.value)}/>
+        </label>
+        <div className="review-action-grid">
+          <article className="review-action-card">
+            <span className="review-action-icon" aria-hidden="true">▤</span>
+            <h3>{localText(dict, 'review_queue_load')}</h3>
+            <p>{localText(dict, 'review_load_action_description')}</p>
+            <button className="button secondary" disabled={busy || !token.trim()} onClick={() => void loadQueue()}>
+              {localText(dict, 'review_queue_load')} <span aria-hidden="true">→</span>
+            </button>
+          </article>
+          <article className="review-action-card review-discover-action">
+            <span className="review-action-icon" aria-hidden="true">✦</span>
+            <h3>{localText(dict, 'review_discover')}</h3>
+            <p>{localText(dict, 'review_discover_action_description')}</p>
+            <button className="button primary" disabled={busy || !token.trim()} onClick={() => void discover()}>
+              {localText(dict, 'review_discover')} <span aria-hidden="true">→</span>
+            </button>
+          </article>
         </div>
         {status && <p className="notice" role="status">{localText(dict, status.key, status.values)}</p>}
         {error && <p className="error-text" role="alert">{localText(dict, error)}</p>}
       </article>
-      <article className="panel">
+      <article className="panel review-sources-panel">
         <h2>{localText(dict, 'review_allowed_sources_title')}</h2>
         <p>{localText(dict, 'review_allowed_sources')}</p>
+        <a className="review-resource-link" href="https://www.theottoolbox.com/feed/" target="_blank" rel="noopener noreferrer">
+          <span>{localText(dict, 'review_open_source_feed')}</span><span aria-hidden="true">↗</span>
+          <small>www.theottoolbox.com/feed/</small>
+        </a>
       </article>
-      <h2>{localText(dict, 'review_pending_candidates', { count: candidates.length })}</h2>
+      <h2 className="review-list-heading">{localText(dict, 'review_pending_candidates', { count: candidates.length })}</h2>
       {candidates.map(item => <ReviewCandidateCard key={item.id} item={item} disabled={busy} onReview={review}/>)}
       {!candidates.length && <p>{localText(dict, 'review_no_candidates')}</p>}
-      <h2>{localText(dict, 'review_published_resources', { count: published.length })}</h2>
-      {published.map(item => <article className="panel" key={item.id}>
+      <h2 className="review-list-heading">{localText(dict, 'review_published_resources', { count: published.length })}</h2>
+      {published.map(item => <article className="panel review-published-card" key={item.id}>
         <h3>{item.title}</h3>
-        <p>{localText(dict, 'resource_source', { value: item.source })} · <a href={item.url} target="_blank" rel="noopener noreferrer">{item.url}</a></p>
+        <p>{localText(dict, 'resource_source', { value: item.source })}</p>
+        <a className="review-resource-link" href={item.url} target="_blank" rel="noopener noreferrer">
+          <span>{localText(dict, 'resource_open_external')}</span><span aria-hidden="true">↗</span><small>{item.url}</small>
+        </a>
         <p>{localText(dict, 'review_discovered_link_check', {
           discovered: new Date(item.discovered_at).toLocaleString(languageLocale(language)),
           checked: item.verified_at ? new Date(item.verified_at).toLocaleString(languageLocale(language)) : localText(dict, 'review_not_verified'),
@@ -622,7 +651,9 @@ function ReviewCandidateCard({ item, disabled, onReview }) {
       <p className="notice">{localText(dict, 'review_candidate_unapproved')}</p>
       <h3>{item.title}</h3>
       <p>{localText(dict, 'review_source_publisher', { source: item.source })}</p>
-      <p><a href={item.url} target="_blank" rel="noopener noreferrer">{item.url}</a></p>
+      <a className="review-resource-link" href={item.url} target="_blank" rel="noopener noreferrer">
+        <span>{localText(dict, 'review_open_candidate')}</span><span aria-hidden="true">↗</span><small>{item.url}</small>
+      </a>
       <p>{localText(dict, 'review_discovered_link_check', {
         discovered: new Date(item.discovered_at).toLocaleString(languageLocale(language)),
         checked: item.verified_at ? new Date(item.verified_at).toLocaleString(languageLocale(language)) : localText(dict, 'review_not_checked'),

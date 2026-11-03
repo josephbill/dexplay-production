@@ -54,6 +54,231 @@
   gap: 18px;
 }
 
+.review-page {
+  display: grid;
+  align-content: start;
+  gap: 22px;
+}
+
+.review-page .page-heading {
+  margin: 0;
+}
+
+.review-access-panel {
+  display: grid;
+  gap: 20px;
+  padding: clamp(20px, 3vw, 32px);
+  border-color: #e4e9f1;
+  background: linear-gradient(145deg, #fff 62%, #f5f8ff);
+}
+
+.review-access-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.review-access-heading h2,
+.review-action-card h3 {
+  margin: 0;
+}
+
+.review-access-heading p,
+.review-action-card p,
+.review-sources-panel p {
+  margin: 8px 0 0;
+  color: var(--dex-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.review-access-icon,
+.review-action-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: #fff0d8;
+  color: #8d5b1d;
+  font-size: 1.25rem;
+}
+
+.review-credential-field {
+  display: grid;
+  gap: 8px;
+  max-width: 720px;
+  font-weight: 700;
+}
+
+.review-credential-field input,
+.review-candidate input,
+.review-candidate select,
+.review-candidate textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 11px 13px;
+  border: 1px solid #d8e0ec;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--dex-ink);
+}
+
+.review-candidate textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.review-credential-field input:focus,
+.review-candidate input:focus,
+.review-candidate select:focus,
+.review-candidate textarea:focus {
+  border-color: #6d91c5;
+  outline: 3px solid #6d91c533;
+}
+
+.review-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.review-action-card {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--dex-border);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.review-action-card p {
+  margin: 0;
+  min-height: 3.1em;
+}
+
+.review-action-card .button {
+  gap: 10px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}
+
+.review-action-card .button span {
+  flex: 0 0 auto;
+}
+
+.review-discover-action {
+  border-color: #f0dfc5;
+  background: linear-gradient(145deg, #fffaf1, #fff);
+}
+
+.review-discover-action .review-action-icon {
+  background: #ffedc9;
+}
+
+.review-sources-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.review-sources-panel h2,
+.review-published-card h3 {
+  margin: 0;
+}
+
+.review-resource-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 13px 15px;
+  border: 1px solid #dce5f2;
+  border-radius: 13px;
+  background: #f7faff;
+  color: #28568e;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.review-resource-link:hover {
+  border-color: #a9bfdf;
+  background: #edf4ff;
+  text-decoration: underline;
+}
+
+.review-resource-link:focus-visible {
+  outline: 3px solid #6d91c5;
+  outline-offset: 3px;
+}
+
+.review-resource-link > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-resource-link small {
+  grid-column: 1 / -1;
+  color: var(--dex-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.review-list-heading {
+  margin: 6px 0 -8px;
+  overflow-wrap: anywhere;
+}
+
+.review-candidate {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.review-candidate > h3,
+.review-candidate > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-candidate > label:not(.consent-check) {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.review-candidate .notice {
+  margin: 0;
+}
+
+.review-candidate .form-actions {
+  gap: 12px;
+  margin-top: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--dex-border);
+}
+
+.review-published-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.review-published-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .clinic-page {
   display: grid;
   align-content: start;
@@ -313,6 +538,14 @@
 }
 
 @media (max-width: 900px) {
+  .review-action-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-action-card p {
+    min-height: 0;
+  }
+
   .clinic-page .patient-table {
     gap: 12px;
     padding: 14px;
