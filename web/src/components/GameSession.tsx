@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CameraCoach } from '../cv/CameraCoach';
 import { queueSync, saveSession } from '../db';
 import { t } from '../i18n';
+import { logOperationEvent, startOperation } from '../operationLog';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const colors = ['red', 'blue', 'green', 'yellow'];
@@ -70,6 +71,8 @@ export function GameSession({
   const lastUiFrame = useRef(0);
   const waitingForCamera = useRef(false);
   const lastCornerCount = useRef(calibration.length);
+  const cameraStatusRef = useRef(cameraStatus);
+  const sessionOperationRef = useRef(null);
 
   const target = colors[(roundNum - 1) % colors.length];
   const total = 4;
@@ -123,6 +126,14 @@ export function GameSession({
 
   const handleCameraStatus = useCallback(
     (status) => {
+      if (cameraStatusRef.current !== status) {
+        if (sessionOperationRef.current) {
+          sessionOperationRef.current.event('camera_status_changed', { status });
+        } else {
+          logOperationEvent('camera', 'status_changed', { status });
+        }
+        cameraStatusRef.current = status;
+      }
       setCameraStatus(status);
       if (status === 'ready' && started) {
         if (waitingForCamera.current) {
@@ -153,6 +164,11 @@ export function GameSession({
       const newIndex = nextCorners.length - 1;
       if (newIndex < 0) return;
 
+      if (sessionOperationRef.current) {
+        sessionOperationRef.current.event('calibration_updated', { status: reason, item_count: nextCorners.length });
+      } else {
+        logOperationEvent('game.calibration', reason, { item_count: nextCorners.length });
+      }
       setCornerFeedback({ index: newIndex, ts: Date.now() });
       beep(880, 90);
       haptic();
@@ -241,6 +257,7 @@ export function GameSession({
     };
     const next = [...rowsRef.current, row];
     rowsRef.current = next;
+    sessionOperationRef.current?.event('round_completed', { item_count: next.length });
     if (roundNum < 3) {
       setRoundNum((value) => value + 1);
       setPlaced(0);
@@ -254,8 +271,11 @@ export function GameSession({
     setSaving(true);
     const endedAt = new Date().toISOString();
     const finishedSession = { ...session, ended_at: endedAt };
+    const operation = sessionOperationRef.current ?? startOperation('game.session');
+    operation.event('saving_local');
     try {
       await saveSession(finishedSession, next);
+      operation.event('local_saved');
       const previousAccuracy = await recentSessionAccuracies(profile.id, session.id);
       const analysisProfile = {
         group: clinic ? 'clinic' : 'child',
@@ -303,10 +323,14 @@ export function GameSession({
       if (apiKey) {
         if (navigator.onLine) {
           try {
-            const result = await sendSync(payload, apiKey);
+            const result = await sendSync(payload, apiKey, operation.requestId);
+            operation.event('cloud_sync_completed', { source: 'cloud' });
+            operation.complete({ source: 'cloud', offline: false });
             onFinished(finishedSession, next, result);
-          } catch {
+          } catch (err) {
+            operation.event('cloud_sync_unavailable', { source: 'cloud' });
             await queueSync(payload, profile.id);
+            operation.complete({ source: 'offline_queue', offline: false });
             onFinished(
               finishedSession,
               next,
@@ -319,6 +343,8 @@ export function GameSession({
           }
         } else {
           await queueSync(payload, profile.id);
+          operation.event('queued_for_sync', { source: 'offline_queue', offline: true });
+          operation.complete({ source: 'offline_queue', offline: true });
           onFinished(
             finishedSession,
             next,
@@ -335,9 +361,13 @@ export function GameSession({
             session_data: reportPayload,
             profile: analysisProfile,
             ai_consent: true,
-          });
+          }, operation.requestId);
+          operation.event('ai_analysis_completed', { source: 'cloud' });
+          operation.complete({ source: 'cloud', offline: false });
           onFinished(finishedSession, next, result);
-        } catch {
+        } catch (err) {
+          operation.event('ai_analysis_unavailable', { source: 'cloud' });
+          operation.complete({ source: 'local', offline: false });
           onFinished(
             finishedSession,
             next,
@@ -349,6 +379,8 @@ export function GameSession({
           );
         }
       } else {
+        operation.event('local_results_only', { source: 'local', offline: !navigator.onLine });
+        operation.complete({ source: 'local', offline: !navigator.onLine });
         onFinished(
           finishedSession,
           next,
@@ -362,6 +394,7 @@ export function GameSession({
         );
       }
     } catch (err) {
+      operation.fail(err, { source: 'local' });
       setError(err instanceof Error ? err.message : 'Could not save this session.');
       setSaving(false);
     }
@@ -389,6 +422,8 @@ export function GameSession({
   }, [seconds, started, paused, cameraStatus, completeRound]);
 
   const start = () => {
+    sessionOperationRef.current = startOperation('game.session');
+    sessionOperationRef.current.event('game_started', { offline: !navigator.onLine });
     rowsRef.current = [];
     setRoundNum(1);
     setPlaced(0);
@@ -402,8 +437,13 @@ export function GameSession({
   };
 
   const resume = () => {
-    if (cameraStatus === 'ready') setPaused(false);
-    else setResumePending(true);
+    if (cameraStatus === 'ready') {
+      sessionOperationRef.current?.event('resumed');
+      setPaused(false);
+    } else {
+      sessionOperationRef.current?.event('resume_waiting_for_camera');
+      setResumePending(true);
+    }
   };
 
   if (saving) {
@@ -538,7 +578,14 @@ export function GameSession({
           <div className="game-actions">
             <button
               className="button secondary large"
-              onClick={() => (paused ? resume() : setPaused(true))}
+              onClick={() => {
+                if (paused) {
+                  resume();
+                } else {
+                  sessionOperationRef.current?.event('paused');
+                  setPaused(true);
+                }
+              }}
               disabled={resumePending}
             >
               {resumePending
@@ -590,10 +637,10 @@ async function recentSessionAccuracies(profileId, currentSessionId) {
   return accuracies;
 }
 
-async function analyzeFreeSession(payload) {
+async function analyzeFreeSession(payload, requestId) {
   const response = await fetch(`${API}/analysis/free`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -622,10 +669,10 @@ function localBriefReport(rounds, language, analysisStatus) {
   };
 }
 
-async function sendSync(payload, apiKey) {
+async function sendSync(payload, apiKey, requestId) {
   const response = await fetch(`${API}/sync`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey },
+    headers: { 'Content-Type': 'application/json', 'X-Device-Key': apiKey, 'X-Request-ID': requestId },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {

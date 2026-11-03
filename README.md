@@ -33,7 +33,7 @@ The latest web build precaches 10,785 KiB uncompressed (about 3.64 MB gzip acros
 
 ## Sync diagnostics
 
-For a sync attempt, open the browser developer console and filter for `[DexPlay sync]`. Each request logs a correlation ID, source (offline queue or local history), HTTP status/latency, generated and missing report audiences, and agent availability. In Render API logs, search for that same `request_id`; the API logs persistence, per-agent start/completion/failure and timing, LLM tool/model/provider request IDs and status, and the final report audiences. These diagnostics intentionally omit access keys, profile/session identifiers, report text, and game metrics.
+For browser operations, open the developer console and filter for `[DexPlay operation]`; this covers app initialization, local profile/calibration/difficulty/privacy actions, camera lifecycle, game completion, background sync, key activation, PayPal checkout/claim, and resource catalog/reviewer actions. Sync also has detailed `[DexPlay sync]` events. Correlation IDs and elapsed time/status are included where available. In Render API logs, search for the same `request_id`; the API logs every non-health request using its route template (not path/query values), plus persistence, PayPal lifecycle, review decisions, per-agent timing/failures, and LLM tool/model/provider status. Logs omit credentials, reviewer tokens, profile/session/resource identifiers, phone numbers, request/response bodies, report text, and raw game metrics; errors are represented by type, not message.
 
 ## API tooling
 

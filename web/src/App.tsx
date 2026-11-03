@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { db, getSetting, pendingSyncCount, recentSessions, setSetting } from './db';
 import { languages, detectLanguage, dictionary, t } from './i18n';
 import { aiConsentDescription } from './i18n/aiConsent';
+import { logOperationEvent, startOperation } from './operationLog';
 import { GameSession } from './components/GameSession';
 import { CameraCoach } from './cv/CameraCoach';
 import { CameraBench } from './components/CameraBench';
@@ -43,8 +44,10 @@ export default function App() {
     const clinic = group === 'clinic';
     const setLang = useCallback(async (next) => { setLanguage(next); localStorage.setItem('dexplay.language', next); await setSetting('language', next); }, []);
     useEffect(() => {
+        const operation = startOperation('app.initialize');
         let live = true;
         void (async () => {
+            try {
             const [savedLanguage, savedGroup, savedProfile, savedTheme, savedContrast, savedVoice, savedKey, savedCalibration, savedReminder] = await Promise.all([
                 getSetting('language', detectLanguage()), getSetting('group', null), getSetting('current-profile', null),
                 getSetting('theme', 'child'), getSetting('high-contrast', false), getSetting('voice', true),
@@ -55,8 +58,10 @@ export default function App() {
             const profileConsent = savedProfile
                 ? await getSetting(`ai-consent:${savedProfile.id}`, false)
                 : false;
-            if (!live)
+            if (!live) {
+                operation.event('cancelled', { source: 'local' });
                 return;
+            }
             setLanguage(savedLanguage);
             localStorage.setItem('dexplay.language', savedLanguage);
             setGroup(savedGroup);
@@ -75,8 +80,15 @@ export default function App() {
             else
                 setRoute('setup');
             setPending(await pendingSyncCount());
-        })().catch(() => setError('Unable to open local storage. Please enable site storage and reload.'));
-        const onlineHandler = () => setOnline(true), offlineHandler = () => setOnline(false);
+            operation.complete({ source: 'local' });
+            } catch (err) {
+                operation.fail(err, { source: 'local' });
+                if (live)
+                    setError('Unable to open local storage. Please enable site storage and reload.');
+            }
+        })();
+        const onlineHandler = () => { setOnline(true); logOperationEvent('network', 'online'); };
+        const offlineHandler = () => { setOnline(false); logOperationEvent('network', 'offline'); };
         const installHandler = (event) => { event.preventDefault(); setInstallPrompt(event); };
         window.addEventListener('online', onlineHandler);
         window.addEventListener('offline', offlineHandler);
@@ -88,17 +100,21 @@ export default function App() {
         const token = new URLSearchParams(location.search).get('claim');
         if (!token)
             return;
+        const operation = startOperation('paypal.activation_claim');
         let cancelled = false;
         void (async () => {
             try {
                 for (let attempt = 0; attempt < 10; attempt++) {
-                    const response = await fetch(`${API}/paypal/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activation_token: token }) });
+                    const response = await fetch(`${API}/paypal/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Request-ID': operation.requestId }, body: JSON.stringify({ activation_token: token }) });
                     if (response.status === 202) {
+                        operation.event('pending', { attempt: attempt + 1, status_code: response.status });
                         await new Promise(resolve => setTimeout(resolve, 2500));
                         continue;
                     }
-                    if (!response.ok)
+                    if (!response.ok) {
+                        operation.event('rejected', { status_code: response.status });
                         throw new Error('The payment is not active yet. Please return later or contact support.');
+                    }
                     const result = await response.json();
                     if (cancelled)
                         return;
@@ -112,11 +128,13 @@ export default function App() {
                     setNotice('Cloud access is active. Your access key is saved on this device.');
                     if (result.account_type === 'clinic')
                         setGroup('clinic');
+                    operation.complete({ source: 'cloud', status_code: response.status });
                     return;
                 }
                 throw new Error('PayPal approval is still processing. Check Settings in a moment.');
             }
             catch (err) {
+                operation.fail(err, { source: 'cloud' });
                 if (!cancelled)
                     setError(err instanceof Error ? err.message : 'Could not activate the subscription.');
             }
@@ -127,6 +145,8 @@ export default function App() {
         void pendingSyncCount().then(setPending); }; navigator.serviceWorker?.addEventListener('message', message); return () => navigator.serviceWorker?.removeEventListener('message', message); }, []);
     useEffect(() => { document.documentElement.lang = language; document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr'; document.documentElement.dataset.theme = theme; document.documentElement.dataset.contrast = highContrast ? 'high' : 'normal'; }, [language, theme, highContrast]);
     const storeProfile = useCallback(async (next) => {
+        const operation = startOperation('profile.save');
+        try {
         await (await db()).put('patients', next);
         await setSetting('current-profile', next);
         await setSetting('group', next.group);
@@ -135,13 +155,40 @@ export default function App() {
         setGroup(next.group);
         setPatients(await (await db()).getAll('patients'));
         setRoute('calibrate');
+        operation.complete({ source: 'local' });
+        } catch (err) {
+            operation.fail(err, { source: 'local' });
+            throw err;
+        }
     }, []);
-    const changePatient = async (next) => { setProfile(next); setAiConsent(await getSetting(`ai-consent:${next.id}`, false)); await setSetting('current-profile', next); setCalibration(await getSetting(`calibration:${next.id}`, [])); setRoute('home'); };
+    const changePatient = async (next) => {
+        const operation = startOperation('profile.switch');
+        try {
+            const consent = await getSetting(`ai-consent:${next.id}`, false);
+            const savedCalibration = await getSetting(`calibration:${next.id}`, []);
+            await setSetting('current-profile', next);
+            setProfile(next);
+            setAiConsent(consent);
+            setCalibration(savedCalibration);
+            setRoute('home');
+            operation.complete({ source: 'local' });
+        } catch (err) {
+            operation.fail(err, { source: 'local' });
+            throw err;
+        }
+    };
     const onCalibration = async (points) => {
-        setCalibration(points);
-        await setSetting('calibration:default', points);
-        if (profile)
-            await setSetting(`calibration:${profile.id}`, points);
+        const operation = startOperation('game.calibration_save');
+        try {
+            await setSetting('calibration:default', points);
+            if (profile)
+                await setSetting(`calibration:${profile.id}`, points);
+            setCalibration(points);
+            operation.complete({ source: 'local', item_count: points.length });
+        } catch (err) {
+            operation.fail(err, { source: 'local' });
+            throw err;
+        }
     };
     const finishGame = async (session, _rounds, result) => {
         setCloudReport(null);
@@ -177,6 +224,8 @@ export default function App() {
     const saveDifficultyChoice = async (difficulty) => {
         if (!profile)
             return;
+        const operation = startOperation('difficulty.save_choice');
+        try {
         const { rationale, ...settings } = difficulty;
         const revised = { ...profile, difficulty: settings };
         await (await db()).put('patients', revised);
@@ -184,10 +233,17 @@ export default function App() {
         setProfile(revised);
         setDifficultyProposal(null);
         setNotice('Your selected game difficulty was saved for the next session.');
+        operation.complete({ source: 'local' });
+        } catch (err) {
+            operation.fail(err, { source: 'local' });
+            throw err;
+        }
     };
     const deleteLocalData = async () => {
         if (!window.confirm('Delete all DexPlay information stored on this device?'))
             return;
+        const operation = startOperation('privacy.delete_local_data');
+        try {
         const database = await db();
         database.close();
         await indexedDB.deleteDatabase('dexplay-production');
@@ -201,7 +257,12 @@ export default function App() {
         setApiKey('');
         setGroup(null);
         setRoute('setup');
+        operation.complete({ source: 'local' });
         location.reload();
+        } catch (err) {
+            operation.fail(err, { source: 'local' });
+            throw err;
+        }
     };
     const nav = [['home', 'home', '⌂'], ['play', 'play', '✦'], ...(clinic ? [["patients", "patients", "♧"]] : []), ['reports', 'reports', '▤'], ['resources', 'resources', '◇'], ['settings', 'settings', '⚙']];
     if (route === 'setup')
@@ -222,7 +283,7 @@ export default function App() {
         {route === 'reports' && <ReportsScreen profile={profile} clinic={clinic} dict={dict} cloudReport={cloudReport} analysisStatus={analysisStatus} difficultyProposal={difficultyProposal} onDifficultyAccept={saveDifficultyChoice} onDifficultyDecline={() => { setDifficultyProposal(null); setAnalysisStatus('Difficulty proposal declined. The saved game settings were not changed.'); }} apiKey={apiKey} onPrint={() => window.print()} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')}/>}
         {route === 'resources' && <ResourcesScreen resources={resources} profile={profile} dict={dict} onDelete={async (id) => { await removeResource(id); setResources(await (await db()).getAll('resource_cache')); }}/>}
         {route === 'resource-review' && <ResourceReviewScreen onBack={() => setRoute('settings')}/>}
-        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} aiConsent={aiConsent} onAiConsent={async (value) => { setAiConsent(value); await setSetting(`ai-consent:${profile.id}`, value); }} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onResourceReview={() => setRoute('resource-review')} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))} onSyncComplete={async () => setPending(await pendingSyncCount())}/>}
+        {route === 'settings' && <SettingsScreen language={language} profile={profile} clinic={clinic} dict={dict} theme={theme} highContrast={highContrast} voice={voice} aiConsent={aiConsent} onAiConsent={async (value) => { const operation = startOperation('privacy.ai_consent'); try { await setSetting(`ai-consent:${profile.id}`, value); setAiConsent(value); operation.complete({ enabled: value, source: 'local' }); } catch (err) { operation.fail(err, { source: 'local' }); throw err; } }} apiKey={apiKey} reminderTime={reminderTime} notifyPermission={notifyPermission} installPrompt={installPrompt} onResourceReview={() => setRoute('resource-review')} onLanguage={setLang} onProfileLanguage={async (value) => { const revised = { ...profile, language: value }; setProfile(revised); await (await db()).put('patients', revised); await setSetting('current-profile', revised); }} onTheme={async (value) => { setTheme(value); await setSetting('theme', value); }} onContrast={async (value) => { setHighContrast(value); await setSetting('high-contrast', value); }} onVoice={async (value) => { setVoice(value); await setSetting('voice', value); }} onApiKey={async (value) => { setApiKey(value); await setSetting('api-key', value); }} onReminder={async (value) => { setReminderTime(value); await setSetting('reminder-time', value); }} onPermission={setNotifyPermission} onDelete={deleteLocalData} onRefreshInstall={() => setInstallPrompt(null)} onResources={async () => setResources(await (await db()).getAll('resource_cache'))} onSyncComplete={async () => setPending(await pendingSyncCount())}/>}
       </main>
     </div>
     <nav className="mobile-nav" aria-label="Main navigation">{nav.map(([path, label, icon]) => <button key={path} className={route === path ? 'active' : ''} onClick={() => setRoute(path)}><span aria-hidden="true">{icon}</span><small>{localText(dict, label)}</small></button>)}</nav>
@@ -301,10 +362,30 @@ function ResourcesScreen({ resources, profile, dict, onDelete }) {
     const [openUrl, setOpenUrl] = useState('');
     const [published, setPublished] = useState([]);
     const [catalogError, setCatalogError] = useState('');
-    useEffect(() => { let active = true; void fetch(`${API}/resources?age_group=${encodeURIComponent(profile.age_group)}&language=${encodeURIComponent(profile.language)}`).then(async response => {
-      if (!response.ok) throw new Error(`Resource catalog unavailable (${response.status}).`);
-      return response.json();
-    }).then(data => { if (active) { setPublished(data.resources || []); setCatalogError(''); } }).catch(reason => { if (active) { setPublished([]); setCatalogError(reason instanceof Error ? reason.message : 'Published resources could not be loaded.'); } }); return () => { active = false; }; }, [profile.age_group, profile.language]);
+    useEffect(() => {
+      let active = true;
+      const operation = startOperation('resource.catalog_load');
+      void fetch(`${API}/resources?age_group=${encodeURIComponent(profile.age_group)}&language=${encodeURIComponent(profile.language)}`).then(async response => {
+        if (!response.ok) {
+          operation.event('rejected', { source: 'cloud', status_code: response.status });
+          throw new Error(`Resource catalog unavailable (${response.status}).`);
+        }
+        return response.json();
+      }).then(data => {
+        if (active) {
+          setPublished(data.resources || []);
+          setCatalogError('');
+          operation.complete({ source: 'cloud', item_count: data.resources?.length ?? 0 });
+        }
+      }).catch(reason => {
+        operation.fail(reason, { source: 'cloud' });
+        if (active) {
+          setPublished([]);
+          setCatalogError(reason instanceof Error ? reason.message : 'Published resources could not be loaded.');
+        }
+      });
+      return () => { active = false; };
+    }, [profile.age_group, profile.language]);
     const allResources = [...published, ...resources.filter(item => !published.some(entry => entry.id === item.id))];
     return <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'resources')}</p><h1>{localText(dict, 'resources')}</h1><p>Reviewed links and locally saved catalog files. External links are not clinical validation.</p></div>{catalogError && <p className="notice" role="status">{catalogError}</p>}{allResources.length === 0 ? <article className="panel empty-state"><div>◇</div><h2>{localText(dict, 'no_resources')}</h2><p>There are currently no published resources matching this broad age band.</p></article> : <div className="resource-grid">{allResources.map(item => <article className="resource-card" key={item.id}><span className="resource-type">{item.externally_sourced ? 'EXTERNAL WEB RESOURCE' : item.type.toUpperCase()} · {(item.language || 'en').toUpperCase()}</span><h2>{item.title}</h2>{item.externally_sourced ? <><p>Source: {item.source}</p><p>Access: {item.access_status}; license: {item.license}</p><p>Age range: {item.age_range}</p><p>Mat activity relevance: {item.mat_relevance}</p><p>Safety notes: {item.safety_notes}</p><p>Review notes: {item.review_notes || 'None recorded'}</p><p>Discovered: {item.discovered_at ? new Date(item.discovered_at).toLocaleDateString() : 'Not recorded'} · Link checked: {item.verified_at ? new Date(item.verified_at).toLocaleDateString() : 'Not verified'} ({item.link_status || 'status unknown'})</p><p>Reviewed by {item.reviewer_role || 'designated reviewer'} on {item.reviewed_at ? new Date(item.reviewed_at).toLocaleDateString() : 'date unavailable'}.</p><p>{item.clinic_recommended ? `Clinic-approved for this PoC. Evidence: ${item.clinic_approval_evidence}` : 'Externally sourced; not clinic-recommended.'} This link is not clinically validated.</p><a className="button secondary" href={item.url} target="_blank" rel="noopener noreferrer">Open external resource</a></> : <><p>{item.license || ''}</p><p>{item.clinic_recommended ? `Clinic-approved for this PoC. Evidence: ${item.clinic_approval_evidence}` : 'Catalog resource; not clinic-recommended.'}</p>{resources.some(row => row.id === item.id) ? <div className="resource-actions"><button className="button secondary" onClick={() => setOpenUrl(openUrl === item.id ? '' : item.id)}>{localText(dict, 'continue')}</button><button className="text-link danger-link" onClick={() => onDelete(item.id)}>{localText(dict, 'delete')}</button></div> : <a className="button secondary" href={item.url} target="_blank" rel="noopener noreferrer">Open catalog resource</a>}{openUrl === item.id && <ResourcePreview item={item}/>}</>}</article>)}</div>}</section>;
 }
@@ -322,18 +403,37 @@ function ResourceReviewScreen({ onBack }) {
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     const request = async (path, method = 'GET', body) => {
-        const response = await fetch(`${API}${path}`, {
-            method,
-            headers: {
-                Authorization: `Bearer ${token}`,
-                ...(body ? { 'Content-Type': 'application/json' } : {}),
-            },
-            body: body ? JSON.stringify(body) : undefined,
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok)
-            throw new Error(data.detail || `Reviewer request failed (${response.status}).`);
-        return data;
+        const action = path.endsWith('/discover') ? 'discover'
+            : path.endsWith('/approve') ? 'approve'
+            : path.endsWith('/reject') ? 'reject'
+            : path.endsWith('/published') ? 'load_published'
+            : 'load_candidates';
+        const operation = startOperation(`resource.reviewer_${action}`);
+        try {
+            const response = await fetch(`${API}${path}`, {
+                method,
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'X-Request-ID': operation.requestId,
+                    ...(body ? { 'Content-Type': 'application/json' } : {}),
+                },
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                operation.event('rejected', { source: 'reviewer', status_code: response.status });
+                throw new Error(data.detail || `Reviewer request failed (${response.status}).`);
+            }
+            operation.complete({
+                source: 'reviewer',
+                status_code: response.status,
+                item_count: data.candidates?.length ?? data.resources?.length ?? data.added?.length,
+            });
+            return data;
+        } catch (err) {
+            operation.fail(err, { source: 'reviewer' });
+            throw err;
+        }
     };
     const loadQueue = async () => {
         if (!token.trim()) {
@@ -437,35 +537,56 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         });
         return () => { cancelled = true; };
     }, []);
-    const activate = async (event) => { event.preventDefault(); setActivationError(''); setBusy(true); try {
-        const response = await fetch(`${API}/keys/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: keyInput, device_label: clinic ? 'clinic-tablet' : profile.name }) });
-        if (!response.ok)
-            throw new Error(localText(dict, 'key_invalid'));
-        await onApiKey(keyInput);
-        setKeyInput('');
-    }
-    catch (err) {
-        setActivationError(err instanceof Error ? err.message : localText(dict, 'key_invalid'));
-    }
-    finally {
-        setBusy(false);
-    } };
-    const subscribe = async (plan) => { setActivationError(''); setBusy(true); try {
-        const response = await fetch(`${API}/paypal/create_subscription`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan, language, sms_consent: smsConsent, phone_number: smsConsent ? phone || undefined : undefined }) });
+    const activate = async (event) => {
+        event.preventDefault();
+        const operation = startOperation('device_key.activate');
+        setActivationError('');
+        setBusy(true);
+        try {
+            const response = await fetch(`${API}/keys/activate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Request-ID': operation.requestId },
+                body: JSON.stringify({ api_key: keyInput, device_label: clinic ? 'clinic-tablet' : profile.name }),
+            });
+            if (!response.ok) {
+                operation.event('rejected', { source: 'cloud', status_code: response.status });
+                throw new Error(localText(dict, 'key_invalid'));
+            }
+            await onApiKey(keyInput);
+            setKeyInput('');
+            operation.complete({ source: 'cloud', status_code: response.status });
+        } catch (err) {
+            operation.fail(err, { source: 'cloud' });
+            setActivationError(err instanceof Error ? err.message : localText(dict, 'key_invalid'));
+        } finally {
+            setBusy(false);
+        }
+    };
+    const subscribe = async (plan) => {
+        const operation = startOperation('paypal.checkout');
+        setActivationError('');
+        setBusy(true);
+        try {
+        const response = await fetch(`${API}/paypal/create_subscription`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Request-ID': operation.requestId }, body: JSON.stringify({ plan, language, sms_consent: smsConsent, phone_number: smsConsent ? phone || undefined : undefined }) });
         if (!response.ok) {
+            operation.event('rejected', { source: 'cloud', status_code: response.status });
             const body = await response.json().catch(() => ({}));
             throw new Error(body.detail || 'Could not create a secure PayPal checkout.');
         }
         const data = await response.json();
+        operation.complete({ source: 'cloud', status_code: response.status });
         window.location.assign(data.approval_url);
-    }
-    catch (err) {
+        } catch (err) {
+        operation.fail(err, { source: 'cloud' });
         setActivationError(err instanceof Error ? err.message : 'PayPal is temporarily unavailable.');
-    }
-    finally {
+        } finally {
         setBusy(false);
-    } };
-    const scanQr = async () => { setActivationError(''); try {
+        }
+    };
+    const scanQr = async () => {
+        const operation = startOperation('device_key.qr_scan');
+        setActivationError('');
+        try {
         const Barcode = window.BarcodeDetector;
         if (!Barcode)
             throw new Error('QR scanning is not supported by this browser. Type the key instead.');
@@ -486,13 +607,14 @@ function SettingsScreen({ language, profile, clinic, dict, theme, highContrast, 
         }
         stream.getTracks().forEach((track) => track.stop());
         setScan(false);
-    }
-    catch (err) {
+        operation.complete({ source: 'local' });
+        } catch (err) {
+        operation.fail(err, { source: 'local' });
         setActivationError(err instanceof Error ? err.message : 'QR scan failed.');
-    }
-    finally {
+        } finally {
         setScan(false);
-    } };
+        }
+    };
     const enableNotify = async () => { if (!('Notification' in window)) {
         setActivationError('Notifications are not supported by this browser.');
         return;
@@ -795,38 +917,57 @@ async function downloadResource(item, profileMatch) {
     await (await db()).put('resource_cache', metadata);
 }
 async function saveResource(item, profileMatch) {
-    if (!item.externally_sourced)
-        return downloadResource(item, profileMatch);
-    const metadata = {
-        id: item.id,
-        title: item.title,
-        type: 'guide',
-        url: item.url,
-        size_mb: 0,
-        downloaded_at: new Date().toISOString(),
-        profile_match: profileMatch,
-        language: item.language || 'en',
-        externally_sourced: true,
-        source: item.source,
-        license: item.license,
-        access_status: item.access_status,
-        age_range: item.age_range,
-        mat_relevance: item.mat_relevance,
-        safety_notes: item.safety_notes,
-        review_notes: item.review_notes,
-        reviewer_role: item.reviewer_role,
-        reviewed_at: item.reviewed_at,
-        clinic_approval_evidence: item.clinic_approval_evidence,
-        discovered_at: item.discovered_at,
-        verified_at: item.verified_at,
-        link_status: item.link_status,
-        clinic_recommended: item.clinic_recommended,
-    };
-    await (await db()).put('resource_cache', metadata);
+    const operation = startOperation('resource.save');
+    try {
+        if (!item.externally_sourced) {
+            await downloadResource(item, profileMatch);
+        } else {
+            const metadata = {
+                id: item.id,
+                title: item.title,
+                type: 'guide',
+                url: item.url,
+                size_mb: 0,
+                downloaded_at: new Date().toISOString(),
+                profile_match: profileMatch,
+                language: item.language || 'en',
+                externally_sourced: true,
+                source: item.source,
+                license: item.license,
+                access_status: item.access_status,
+                age_range: item.age_range,
+                mat_relevance: item.mat_relevance,
+                safety_notes: item.safety_notes,
+                review_notes: item.review_notes,
+                reviewer_role: item.reviewer_role,
+                reviewed_at: item.reviewed_at,
+                clinic_approval_evidence: item.clinic_approval_evidence,
+                discovered_at: item.discovered_at,
+                verified_at: item.verified_at,
+                link_status: item.link_status,
+                clinic_recommended: item.clinic_recommended,
+            };
+            await (await db()).put('resource_cache', metadata);
+        }
+        operation.complete({ source: 'local' });
+    } catch (err) {
+        operation.fail(err, { source: 'local' });
+        throw err;
+    }
 }
-async function removeResource(id) { const database = await db(), resource = await database.get('resource_cache', id); if (resource) {
-    const cache = await caches.open('dexplay-resources');
-    await cache.delete(resource.url);
-    await database.delete('resource_cache', id);
-} }
+async function removeResource(id) {
+    const operation = startOperation('resource.remove');
+    try {
+        const database = await db(), resource = await database.get('resource_cache', id);
+        if (resource) {
+            const cache = await caches.open('dexplay-resources');
+            await cache.delete(resource.url);
+            await database.delete('resource_cache', id);
+        }
+        operation.complete({ source: 'local' });
+    } catch (err) {
+        operation.fail(err, { source: 'local' });
+        throw err;
+    }
+}
 // @ts-nocheck

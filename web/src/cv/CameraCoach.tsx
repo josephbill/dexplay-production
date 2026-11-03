@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
+import { startOperation } from '../operationLog';
 
 /* ------------------------------------------------------------------ *
  * Geometry helpers (unchanged API, no OpenCV)
@@ -256,6 +257,8 @@ export function CameraCoach({
         }
 
         let stopped = false;
+        let workerFailureLogged = false;
+        const operation = startOperation('camera.initialize');
         let fpsFrames = 0;
         let fpsStart = performance.now();
         let frameId;
@@ -273,7 +276,10 @@ export function CameraCoach({
             const { type, results, timestamp, message } = event.data;
             if (type === 'ready') {
                 setCvReady(true);
+                operation.event('processing_ready');
                 statusCallbackRef.current?.('ready');
+            } else if (type === 'fallback') {
+                operation.event('gpu_unavailable_using_cpu');
             } else if (type === 'result') {
                 processWorkerResults(results, timestamp);
                 
@@ -285,6 +291,10 @@ export function CameraCoach({
                 }
             } else if (type === 'error') {
                 setError(`${t(dict, 'camera_processing_error')} ${message}`.trim());
+                if (!workerFailureLogged) {
+                    operation.fail(new Error('CameraProcessingError'), { status: 'error' });
+                    workerFailureLogged = true;
+                }
                 statusCallbackRef.current?.('error');
             }
         };
@@ -310,6 +320,7 @@ export function CameraCoach({
                     audio: false,
                     video: videoConstraints,
                 });
+                operation.event('permission_granted');
                 
                 if (stopped) {
                     stream.getTracks().forEach((t) => t.stop());
@@ -328,6 +339,7 @@ export function CameraCoach({
                     overlayRef.current.height = height;
                 }
                 setReady(true);
+                operation.complete({ status: 'preview_ready' });
 
                 // 3. Start Frame Loop
                 const loop = async () => {
@@ -350,6 +362,7 @@ export function CameraCoach({
 
             } catch (err) {
                 if (!stopped) {
+                    operation.fail(err, { status: 'error' });
                     const hasLivePreview = Boolean(streamRef.current?.active);
                     if (!hasLivePreview) stopCamera();
                     const name = err instanceof Error ? err.name : '';
@@ -376,6 +389,7 @@ export function CameraCoach({
 
         return () => {
             stopped = true;
+            operation.event('stopped');
             cancelAnimationFrame(frameId);
             worker.terminate();
             workerRef.current = null;

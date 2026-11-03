@@ -4,6 +4,8 @@ import unittest
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from starlette.requests import Request
+from starlette.responses import Response
 
 os.environ.update(
     {
@@ -98,6 +100,38 @@ def body(ai_consent: bool) -> SyncRequest:
 
 
 class SyncConsentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_operation_logs_use_route_templates_not_path_identifiers(self):
+        private_resource_id = "resource-candidate-private-id"
+        request = Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "https",
+                "path": f"/review/resources/candidates/{private_resource_id}/approve",
+                "raw_path": f"/review/resources/candidates/{private_resource_id}/approve".encode(),
+                "query_string": b"",
+                "headers": [(b"x-request-id", b"12345678-1234-1234-1234-123456789abc")],
+                "server": ("example.test", 443),
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+        request.scope["route"] = SimpleNamespace(
+            path="/review/resources/candidates/{candidate_id}/approve"
+        )
+
+        async def call_next(_request):
+            return Response(status_code=200)
+
+        with self.assertLogs("dexplay.api", level="INFO") as captured:
+            response = await main.security_headers(request, call_next)
+
+        joined_logs = "\n".join(captured.output)
+        self.assertIn("route=/review/resources/candidates/{candidate_id}/approve", joined_logs)
+        self.assertNotIn(private_resource_id, joined_logs)
+        self.assertEqual(response.headers["X-Request-ID"], "12345678-1234-1234-1234-123456789abc")
+
     async def test_sync_never_calls_agents_when_consent_is_off(self):
         with patch("app.main.orchestrate", new_callable=AsyncMock) as orchestrate:
             result = await main.sync(

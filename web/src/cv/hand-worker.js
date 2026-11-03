@@ -48,9 +48,9 @@ self.onmessage = async (event) => {
           runningMode: 'VIDEO',
           numHands: 1,
         });
-      } catch (gpuErr) {
+      } catch {
         // Fallback to CPU if GPU fails (common on older mobile chips or inside workers)
-        console.warn('[HandWorker] GPU delegate failed, falling back to CPU', gpuErr);
+        self.postMessage({ type: 'fallback', reason: 'gpu_unavailable' });
         landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: '/models/hand_landmarker.task',

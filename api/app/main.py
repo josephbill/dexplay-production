@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, hashlib, hmac, logging, secrets, uuid
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 import httpx
@@ -52,6 +53,7 @@ from .services.resource_discovery import (
 )
 
 log = logging.getLogger("dexplay.api")
+request_id_context: ContextVar[str] = ContextVar("dexplay_api_request_id", default="unknown")
 settings = get_settings()
 app = FastAPI(title="DexPlay Cloud API", version="1.0.0", docs_url=None if settings.app_env == "production" else "/docs",
               redoc_url=None if settings.app_env == "production" else "/redoc")
@@ -70,17 +72,24 @@ async def security_headers(request: Request, call_next):
     ) else str(uuid.uuid4())
     request.state.request_id = request_id
     started = perf_counter()
+    context_token = request_id_context.set(request_id)
     try:
         response = await call_next(request)
     except Exception as exc:
-        log.error("http.request_failed request_id=%s method=%s path=%s error_type=%s",
-                  request_id, request.method, request.url.path, type(exc).__name__)
+        route = request.scope.get("route")
+        route_template = getattr(route, "path", "unmatched")
+        log.error("http.request_failed request_id=%s method=%s route=%s error_type=%s",
+                  request_id, request.method, route_template, type(exc).__name__)
         raise
+    finally:
+        request_id_context.reset(context_token)
     elapsed_ms = round((perf_counter() - started) * 1000)
+    route = request.scope.get("route")
+    route_template = getattr(route, "path", "unmatched")
     response.headers["X-Request-ID"] = request_id
-    if request.url.path in ("/sync", "/analysis/free") or response.status_code >= 400:
-        log.info("http.request_complete request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
-                 request_id, request.method, request.url.path, response.status_code, elapsed_ms)
+    if route_template not in ("/health/live", "/health/ready") or response.status_code >= 400:
+        log.info("http.request_complete request_id=%s method=%s route=%s status=%s elapsed_ms=%s",
+                 request_id, request.method, route_template, response.status_code, elapsed_ms)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(self), microphone=()"
@@ -109,7 +118,8 @@ async def readiness(db: AsyncSession = Depends(get_db)):
         await db.execute(select(1))
         return {"status": "ready"}
     except Exception as exc:
-        log.error("Readiness check failed: %s", type(exc).__name__)
+        log.error("health.readiness_failed request_id=%s error_type=%s",
+                  request_id_context.get(), type(exc).__name__)
         raise HTTPException(503, "Database unavailable") from exc
 
 @app.post("/keys/activate")
@@ -123,6 +133,7 @@ async def activate_device(body: KeyActivationRequest, db: AsyncSession = Depends
     if account.subscription_state != "active":
         raise HTTPException(403, "Subscription is not active")
     device.label = body.device_label
+    log.info("device_key.activated request_id=%s", request_id_context.get())
     return {"valid": True, "account_type": account.profile_type, "subscription_state": account.subscription_state,
             "clinic_patient_limit": account.clinic_patient_limit}
 
@@ -156,6 +167,7 @@ async def sync(request: Request, body: SyncRequest, auth=Depends(authenticated_d
     log.info("sync.persisted request_id=%s action=%s",
              request_id, "updated" if record else "created")
     if not body.ai_consent:
+        log.info("sync.ai_skipped request_id=%s reason=consent_off", request_id)
         return {
             "next_difficulty": None,
             "report": {},
@@ -234,7 +246,8 @@ async def enforce_free_analysis_limit(request: Request):
         if count == 1:
             await redis.expire(key, 3600)
     except RedisError as exc:
-        log.error("Free analysis rate limit unavailable: %s", type(exc).__name__)
+        log.error("analysis.rate_limit_unavailable request_id=%s error_type=%s",
+                  request.state.request_id, type(exc).__name__)
         raise HTTPException(503, "Free session analysis is temporarily unavailable.") from exc
     finally:
         await redis.aclose()
@@ -243,6 +256,7 @@ async def enforce_free_analysis_limit(request: Request):
 
 @app.post("/analysis/free")
 async def analyze_free_session(body: FreeAnalysisRequest, request: Request):
+    log.info("analysis.started request_id=%s tier=free", request.state.request_id)
     await enforce_free_analysis_limit(request)
     session_data = [item.model_dump() for item in body.session_data]
     profile = body.profile.model_dump()
@@ -254,8 +268,11 @@ async def analyze_free_session(body: FreeAnalysisRequest, request: Request):
             brief_report=True,
         )
     except Exception as exc:
-        log.error("Free session analysis failed: %s", type(exc).__name__)
+        log.error("analysis.failed request_id=%s error_type=%s",
+                  request.state.request_id, type(exc).__name__)
         raise HTTPException(503, "Session analysis is temporarily unavailable; local game results are saved.") from exc
+    log.info("analysis.completed request_id=%s ai_generated=true",
+             request.state.request_id)
     return {
         "report": result.get("report", {}),
         "next_difficulty": result["next_difficulty"],
@@ -518,6 +535,8 @@ async def approve_resource_candidate(
     candidate.reviewer_role = "Designated DexPlay content reviewer"
     candidate.reviewed_at = datetime.now(timezone.utc)
     await db.commit()
+    log.info("resource.review_approved request_id=%s clinic_approved=%s link_verified=%s",
+             request_id_context.get(), body.clinic_approved, body.link_verified)
     return {"resource": serialize_candidate(candidate)}
 
 
@@ -535,6 +554,7 @@ async def reject_resource_candidate(
     candidate.reviewer_role = "Designated DexPlay content reviewer"
     candidate.reviewed_at = datetime.now(timezone.utc)
     await db.commit()
+    log.info("resource.review_rejected request_id=%s", request_id_context.get())
     return {"resource": serialize_candidate(candidate)}
 
 @app.get("/paypal/config")
@@ -543,6 +563,8 @@ async def paypal_config():
 
 @app.post("/paypal/create_subscription")
 async def create_subscription(body: SubscriptionRequest, db: AsyncSession = Depends(get_db)):
+    log.info("paypal.checkout_started request_id=%s plan=%s mode=%s",
+             request_id_context.get(), body.plan, settings.paypal_mode)
     if not settings.paypal_enabled:
         raise HTTPException(503, f"{settings.paypal_mode.title()} PayPal credentials, webhook, and active plan IDs are required")
     client = PayPalClient()
@@ -572,13 +594,17 @@ async def create_subscription(body: SubscriptionRequest, db: AsyncSession = Depe
         response = await client.create_subscription(plan_id, reference_id, return_url)
     except httpx_error_types() as exc:
         await db.delete(claim); await db.commit()
-        log.error("PayPal create subscription failed: %s", type(exc).__name__)
+        log.error("paypal.checkout_failed request_id=%s error_type=%s",
+                  request_id_context.get(), type(exc).__name__)
         raise HTTPException(502, "PayPal could not create the subscription") from exc
     claim.subscription_id = response["id"]
     await db.commit()
     approval = next((link["href"] for link in response.get("links", []) if link.get("rel") == "approve"), None)
     if not approval:
+        log.error("paypal.approval_url_missing request_id=%s", request_id_context.get())
         raise HTTPException(502, "PayPal did not return an approval URL")
+    log.info("paypal.checkout_created request_id=%s plan=%s mode=%s",
+             request_id_context.get(), body.plan, settings.paypal_mode)
     return {"subscription_id": response["id"], "approval_url": approval,
             "activation_token": activation_token, "status": response.get("status")}
 
@@ -590,11 +616,14 @@ async def claim_subscription(body: ClaimRequest, db: AsyncSession = Depends(get_
     if claim.claimed_at:
         raise HTTPException(409, "Activation keys have already been claimed")
     if not claim.encrypted_keys:
+        log.info("paypal.claim_pending request_id=%s", request_id_context.get())
         return Response(status_code=202, content='{"status":"pending"}', media_type="application/json")
     keys = decrypt_payload(claim.encrypted_keys)["keys"]
     claim.encrypted_keys = None
     claim.claimed_at = datetime.now(timezone.utc)
     await db.commit()
+    log.info("paypal.claim_completed request_id=%s plan=%s",
+             request_id_context.get(), claim.plan_type)
     return {"status":"active", "keys":keys, "account_type":claim.plan_type}
 
 @app.post("/paypal/webhook")
@@ -603,15 +632,20 @@ async def paypal_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         verified = await PayPalClient().verify_webhook(dict(request.headers), event)
     except Exception as exc:
-        log.error("PayPal webhook verification error: %s", type(exc).__name__)
+        log.error("paypal.webhook_verification_failed request_id=%s error_type=%s",
+                  request_id_context.get(), type(exc).__name__)
         raise HTTPException(502, "Could not verify PayPal event") from exc
     if not verified:
+        log.warning("paypal.webhook_rejected request_id=%s reason=signature_invalid",
+                    request_id_context.get())
         raise HTTPException(400, "PayPal webhook signature verification failed")
     event_id = event.get("id")
     event_type = event.get("event_type")
     if not event_id or not event_type:
         raise HTTPException(400, "Malformed PayPal webhook event")
     if await db.get(WebhookEvent, event_id):
+        log.info("paypal.webhook_duplicate request_id=%s event_type=%s",
+                 request_id_context.get(), event_type)
         return {"received": True, "duplicate": True}
     resource = event.get("resource", {})
     subscription_id = resource.get("id") if event_type.startswith("BILLING.SUBSCRIPTION.") else resource.get("billing_agreement_id")
@@ -637,11 +671,17 @@ async def paypal_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                 phone = decrypt_payload(account.phone_encrypted)["phone"]
                 from .tasks import send_transactional_sms
                 try:
-                    send_transactional_sms.delay(phone, localized_message(claim.language, "activated"))
+                    send_transactional_sms.delay(
+                        phone,
+                        localized_message(claim.language, "activated"),
+                        request_id_context.get(),
+                    )
                 except Exception as exc:
-                    log.error("Could not enqueue activation SMS: %s", type(exc).__name__)
+                    log.error("paypal.activation_sms_enqueue_failed request_id=%s error_type=%s",
+                              request_id_context.get(), type(exc).__name__)
         else:
-            log.error("Verified activation lacked a valid pending claim")
+            log.error("paypal.verified_activation_without_claim request_id=%s",
+                      request_id_context.get())
     elif event_type in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.EXPIRED", "BILLING.SUBSCRIPTION.SUSPENDED", "BILLING.SUBSCRIPTION.PAYMENT.FAILED"):
         account = (await db.execute(select(Account).where(Account.paypal_subscription_id == subscription_id).with_for_update())).scalar_one_or_none()
         if account:
@@ -650,6 +690,8 @@ async def paypal_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             for device in keys: device.active = False
     db.add(WebhookEvent(event_id=event_id, event_type=event_type))
     await db.commit()
+    log.info("paypal.webhook_processed request_id=%s event_type=%s",
+             request_id_context.get(), event_type)
     return {"received":True}
 
 @app.get("/clinic/dashboard")
@@ -677,6 +719,7 @@ async def delete_account(auth=Depends(authenticated_device), db: AsyncSession = 
     _, account = auth
     await db.delete(account)
     await db.commit()
+    log.info("privacy.account_deleted request_id=%s", request_id_context.get())
     return Response(status_code=204)
 
 def localized_message(language: str, kind: str) -> str:
