@@ -63,11 +63,14 @@ export function GameSession({
   const [fumbles, setFumbles] = useState(0);
   const [frame, setFrame] = useState({ objects: [], hand_present: false, ts: 0 });
   const [saving, setSaving] = useState(false);
+  const [savingRound, setSavingRound] = useState(false);
+  const [cameraExpanded, setCameraExpanded] = useState(false);
   const [error, setError] = useState('');
   const [cornerFeedback, setCornerFeedback] = useState(null); // { index, ts }
 
   const roundStart = useRef(0);
   const rowsRef = useRef([]);
+  const completingRoundRef = useRef(false);
   const lastUiFrame = useRef(0);
   const waitingForCamera = useRef(false);
   const lastCornerCount = useRef(calibration.length);
@@ -206,6 +209,20 @@ export function GameSession({
   }, [cornerFeedback]);
 
   useEffect(() => {
+    if (!cameraExpanded) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setCameraExpanded(false);
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [cameraExpanded]);
+
+  useEffect(() => {
     if (calibration.length === 4 && lastCornerCount.current !== 4) {
       if (voice)
         speak(t(dict, 'calibration_complete') || 'Calibration complete!', profile.language);
@@ -241,12 +258,14 @@ export function GameSession({
   );
 
   const completeRound = useCallback(async () => {
-    if (!started) return;
+    if (!started || completingRoundRef.current) return;
+    completingRoundRef.current = true;
+    setSavingRound(true);
     setPaused(true);
     const elapsed = Math.max(1, (Date.now() - roundStart.current) / 1000);
     const row = {
-      id: `${profile.id}-${Date.now()}`,
-      session_id: rowsRef.current[0]?.session_id || session.id,
+      id: `${session.id}-${roundNum}`,
+      session_id: session.id,
       round_num: roundNum,
       mode,
       objects_placed: placed,
@@ -255,26 +274,33 @@ export function GameSession({
       fumbles,
       accuracy: Number((placed / total).toFixed(3)),
     };
-    const next = [...rowsRef.current, row];
-    rowsRef.current = next;
-    sessionOperationRef.current?.event('round_completed', { item_count: next.length });
-    if (roundNum < 3) {
-      setRoundNum((value) => value + 1);
-      setPlaced(0);
-      setFumbles(0);
-      setSeconds(60);
-      roundStart.current = Date.now();
-      setPaused(false);
-      if (voice) speak(instruction, profile.language);
-      return;
-    }
-    setSaving(true);
-    const endedAt = new Date().toISOString();
-    const finishedSession = { ...session, ended_at: endedAt };
+    const next = [
+      ...rowsRef.current.filter((item) => item.round_num !== roundNum),
+      row,
+    ].sort((a, b) => a.round_num - b.round_num);
+    const isFinalRound = roundNum === 3;
+    const finishedSession = isFinalRound
+      ? { ...session, ended_at: new Date().toISOString() }
+      : session;
     const operation = sessionOperationRef.current ?? startOperation('game.session');
-    operation.event('saving_local');
+    if (isFinalRound) operation.event('saving_local');
     try {
       await saveSession(finishedSession, next);
+      rowsRef.current = next;
+      sessionOperationRef.current?.event('round_completed', { item_count: next.length });
+      sessionOperationRef.current?.event('round_saved_locally', { item_count: next.length });
+      if (!isFinalRound) {
+        setRoundNum((value) => value + 1);
+        setPlaced(0);
+        setFumbles(0);
+        setSeconds(60);
+        roundStart.current = Date.now();
+        setPaused(false);
+        if (voice) speak(instruction, profile.language);
+        return;
+      }
+
+      setSaving(true);
       operation.event('local_saved');
       const previousAccuracy = await recentSessionAccuracies(profile.id, session.id);
       const analysisProfile = {
@@ -397,6 +423,9 @@ export function GameSession({
       operation.fail(err, { source: 'local' });
       setError(err instanceof Error ? err.message : 'Could not save this session.');
       setSaving(false);
+    } finally {
+      completingRoundRef.current = false;
+      setSavingRound(false);
     }
   }, [
     started,
@@ -460,7 +489,10 @@ export function GameSession({
   }
 
   return (
-    <section className="game-view" aria-label={t(dict, 'play_title')}>
+    <section
+      className={`game-view${cameraExpanded ? ' camera-expanded' : ''}`}
+      aria-label={t(dict, 'play_title')}
+    >
       <CameraCoach
         active={cameraOn}
         clinic={clinic}
@@ -586,7 +618,7 @@ export function GameSession({
                   setPaused(true);
                 }
               }}
-              disabled={resumePending}
+              disabled={savingRound || resumePending}
             >
               {resumePending
                 ? t(dict, 'cv_loading')
@@ -596,10 +628,20 @@ export function GameSession({
             </button>
             <button
               className="button primary large"
-              disabled={saving}
+              disabled={saving || savingRound}
               onClick={() => void completeRound()}
             >
               {t(dict, 'finish')}
+            </button>
+            <button
+              className="button secondary large camera-expand-toggle"
+              aria-pressed={cameraExpanded}
+              onClick={() => setCameraExpanded((expanded) => !expanded)}
+            >
+              <span aria-hidden="true">{cameraExpanded ? '×' : '⛶'}</span>
+              <span>
+                {t(dict, cameraExpanded ? 'camera_exit_fullscreen' : 'camera_fullscreen')}
+              </span>
             </button>
           </div>
         </>

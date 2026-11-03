@@ -199,3 +199,161 @@
   from { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
   to   { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
 }
+
+.camera-expand-toggle {
+  display: none;
+}
+
+.camera-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  padding: 0;
+  background: #080d16;
+  color: #fff;
+}
+
+.camera-expanded .camera-card {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.camera-expanded .camera-frame {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(100vw, 133.333dvh);
+  height: min(75vw, 100dvh);
+  aspect-ratio: 4 / 3 !important;
+  transform: translate(-50%, -50%);
+  border-radius: 0;
+  background: #000;
+}
+
+.camera-expanded .privacy-note {
+  display: none;
+}
+
+.camera-expanded .camera-status {
+  position: absolute;
+  z-index: 3;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 132px);
+  left: max(12px, env(safe-area-inset-left));
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: #101722d9;
+  color: #fff;
+}
+
+.camera-expanded .camera-card > .button {
+  position: absolute;
+  z-index: 3;
+  top: calc(max(12px, env(safe-area-inset-top)) + 82px);
+  left: max(12px, env(safe-area-inset-left));
+}
+
+.camera-expanded .game-top,
+.camera-expanded .game-status,
+.camera-expanded .game-actions {
+  position: absolute;
+  z-index: 2;
+  margin: 0;
+  color: #fff;
+}
+
+.camera-expanded .game-top {
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #101722d9;
+}
+
+.camera-expanded .game-top h2 {
+  margin: 4px 0 0;
+}
+
+.camera-expanded .game-score {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.camera-expanded .game-status {
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px);
+  left: max(12px, env(safe-area-inset-left));
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #101722d9;
+}
+
+.camera-expanded .game-actions {
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: max(12px, env(safe-area-inset-left));
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.camera-expanded .game-actions .button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.camera-expanded .camera-expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.camera-expanded .error-text {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 132px);
+  left: 12px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #7f1d1d;
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .game-view:not(.camera-expanded) .game-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .game-view:not(.camera-expanded) .game-actions .button {
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 0.86rem;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  .game-view:not(.camera-expanded) .camera-expand-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+}
