@@ -286,7 +286,7 @@ export default function App() {
     <div className="app-layout"><nav className="side-nav" aria-label={localText(dict, 'main_navigation')}>{nav.map(([path, label, icon]) => <button key={path} className={route === path ? 'active' : ''} onClick={() => setRoute(path)}><span className="nav-icon" aria-hidden="true">{icon}</span><span>{localText(dict, label)}</span></button>)}<div className="nav-spacer"/><a className="mat-link" href="/mat.svg" target="_blank" rel="noreferrer">▧ {localText(dict, 'mat')}</a></nav>
       <main className="content-area">
         {error && <div className="alert error" role="alert"><span>{localText(dict, error)}</span><button onClick={() => setError('')} aria-label={localText(dict, 'dismiss')}>×</button></div>}{notice && <div className="alert success" role="status"><span>{localText(dict, notice)}</span><button onClick={() => setNotice('')} aria-label={localText(dict, 'dismiss')}>×</button></div>}
-        {route === 'calibrate' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'camera')}</p><h1>{localText(dict, 'mat')}</h1><p>{localText(dict, 'camera_help')}</p><a className="button secondary" href="/mat.svg" target="_blank" rel="noreferrer">{localText(dict, 'mat')}</a></div><CameraCoach active clinic dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={() => { }} onCameraStatus={setCameraStatus}/>{calibration.length === 4 && <button className="button primary large" disabled={cameraStatus !== 'ready'} onClick={() => setRoute('home')}>{localText(dict, 'calibrated')} · {localText(dict, 'continue')}</button>}</section>}
+        {route === 'calibrate' && <section className="page setup-calibration-page"><SetupSteps currentStep={1}/><div className="page-heading"><p className="eyebrow">{localText(dict, 'camera')}</p><h1>{localText(dict, 'mat')}</h1><p>{localText(dict, 'camera_help')}</p><a className="button secondary" href="/mat.svg" target="_blank" rel="noreferrer">{localText(dict, 'mat')}</a></div><CameraCoach active clinic dict={dict} calibration={calibration} onCorner={onCalibration} onFrame={() => { }} onCameraStatus={setCameraStatus}/>{calibration.length === 4 && <button className="button primary large" disabled={cameraStatus !== 'ready'} onClick={() => setRoute('home')}>{localText(dict, 'calibrated')} · {localText(dict, 'continue')}</button>}</section>}
         {route === 'home' && <HomeScreen profile={profile} clinic={clinic} patients={patients} onPlay={() => setRoute('play')} onSettings={() => setRoute('settings')} onPrint={() => setRoute('reports')}/>}
         {route === 'play' && <section className="page"><div className="page-heading"><p className="eyebrow">{localText(dict, 'play')}</p><h1>{profile.name}, {localText(dict, 'welcome')}</h1><p>{localText(dict, 'camera_privacy')}</p></div><GameSession profile={profile} clinic={clinic} voice={voice} dict={dict} calibration={calibration} onCalibration={onCalibration} apiKey={apiKey} aiConsent={aiConsent} onFinished={finishGame} onClose={() => setRoute('home')}/></section>}
         {route === 'patients' && clinic && <ClinicScreen profile={profile} patients={patients} onSwitch={changePatient} onAdd={() => setRoute('setup')} onPlay={() => setRoute('play')}/>}
@@ -303,11 +303,80 @@ export default function App() {
 function SetupScreen({ currentGroup, onGroup, onSave, patients }) {
     const { dict, language } = useI18n();
     const [adding, setAdding] = useState(false);
+    const backFromProfile = currentGroup === 'clinic' && patients.length
+        ? () => setAdding(false)
+        : () => void onGroup(null);
     if (!currentGroup)
-        return <section className="welcome-card"><div className="hero-illustration"><div className="hero-sun"/><div className="hero-hand">✋</div><span className="float-ball red"/><span className="float-ball blue"/><span className="float-ball green"/></div><p className="eyebrow">{localText(dict, 'brand_tagline')}</p><h1>{localText(dict, 'welcome')}</h1><p>{localText(dict, 'tagline')}</p><h2>{localText(dict, 'choose_group')}</h2><div className="group-cards"><button className="group-card child-card" onClick={() => void onGroup('child')}><span>🧸</span><strong>{localText(dict, 'child')}</strong><small>{localText(dict, 'child_age_range')}</small></button><button className="group-card clinic-card" onClick={() => void onGroup('clinic')}><span>🩺</span><strong>{localText(dict, 'clinic')}</strong><small>{localText(dict, 'shared_device_roster_reports')}</small></button></div></section>;
+        return <section className="setup-welcome-page">
+          <div className="setup-welcome-hero">
+            <div className="setup-welcome-copy">
+              <p className="eyebrow">{localText(dict, 'setup_first_visit')}</p>
+              <h1>{localText(dict, 'welcome')}</h1>
+              <p className="setup-welcome-tagline">{localText(dict, 'tagline')}</p>
+              <p>{localText(dict, 'setup_intro')}</p>
+            </div>
+            <div className="setup-hero-art" aria-hidden="true">
+              <div className="setup-hero-sun"/>
+              <span className="setup-hero-hand">✋</span>
+              <span className="setup-hero-token setup-token-red"/>
+              <span className="setup-hero-token setup-token-blue"/>
+              <span className="setup-hero-token setup-token-green"/>
+            </div>
+          </div>
+          <div className="setup-welcome-section">
+            <div className="setup-section-heading">
+              <p className="eyebrow">{localText(dict, 'setup_step_label', { current: 1, total: 3 })}</p>
+              <h2>{localText(dict, 'choose_group')}</h2>
+            </div>
+            <div className="setup-role-grid">
+              <button className="setup-role-card setup-role-child" onClick={() => void onGroup('child')}>
+                <span className="setup-role-icon" aria-hidden="true">🧸</span>
+                <span className="setup-role-card-copy">
+                  <strong>{localText(dict, 'child')}</strong>
+                  <small>{localText(dict, 'child_age_range')}</small>
+                  <span>{localText(dict, 'setup_child_description')}</span>
+                </span>
+                <span className="setup-role-arrow" aria-hidden="true">→</span>
+              </button>
+              <button className="setup-role-card setup-role-clinic" onClick={() => void onGroup('clinic')}>
+                <span className="setup-role-icon" aria-hidden="true">🩺</span>
+                <span className="setup-role-card-copy">
+                  <strong>{localText(dict, 'clinic')}</strong>
+                  <small>{localText(dict, 'shared_device_roster_reports')}</small>
+                  <span>{localText(dict, 'setup_clinic_description')}</span>
+                </span>
+                <span className="setup-role-arrow" aria-hidden="true">→</span>
+              </button>
+            </div>
+          </div>
+          <div className="setup-welcome-section setup-first-session">
+            <div className="setup-section-heading">
+              <p className="eyebrow">{localText(dict, 'brand_tagline')}</p>
+              <h2>{localText(dict, 'setup_steps_heading')}</h2>
+            </div>
+            <SetupSteps currentStep={0}/>
+          </div>
+        </section>;
     if (currentGroup === 'clinic' && patients.length && !adding)
-        return <section className="welcome-card"><p className="eyebrow">{localText(dict, 'clinic')}</p><h1>{localText(dict, 'choose_group')}</h1><p>{localText(dict, 'active_patients')}: {patients.length}</p><div className="patient-list">{patients.map(patient => <button key={patient.id} className="patient-choice" onClick={() => onSave(patient)}><span className="avatar">{patient.name.slice(0, 1)}</span><span>{patient.name}</span><small>{patient.age_years}</small></button>)}</div><button className="button secondary" onClick={() => setAdding(true)}>{localText(dict, 'add_patient')}</button></section>;
-    return <section className="welcome-card setup-form-wrap"><div className="setup-head"><p className="eyebrow">{localText(dict, currentGroup)}</p><h1>{localText(dict, 'child_name')}</h1><p>{localText(dict, 'camera_privacy')}</p></div><br/><ProfileForm group={currentGroup} language={language} onSubmit={onSave} onCancel={currentGroup === 'clinic' && patients.length ? () => setAdding(false) : undefined}/></section>;
+        return <section className="setup-flow-page"><SetupSteps currentStep={0}/><div className="setup-flow-heading"><p className="eyebrow">{localText(dict, 'clinic')}</p><h1>{localText(dict, 'choose_group')}</h1><p>{localText(dict, 'setup_roster_intro')}</p></div><div className="setup-patient-list">{patients.map(patient => <button key={patient.id} className="setup-patient-choice" onClick={() => onSave(patient)}><span className="avatar">{patient.name.slice(0, 1)}</span><span><strong>{patient.name}</strong><small>{patient.age_years} · {localText(dict, 'age')}</small></span><span aria-hidden="true">→</span></button>)}</div><button className="button primary" onClick={() => setAdding(true)}>{localText(dict, 'add_patient')}</button></section>;
+    return <section className="setup-flow-page"><SetupSteps currentStep={0}/><div className="setup-flow-heading"><p className="eyebrow">{localText(dict, currentGroup)}</p><h1>{localText(dict, 'child_name')}</h1><p>{localText(dict, 'setup_profile_intro')}</p><button type="button" className="setup-change-path" onClick={backFromProfile}>{localText(dict, currentGroup === 'clinic' && patients.length ? 'back' : 'setup_change_path')}</button></div><ProfileForm group={currentGroup} language={language} onSubmit={onSave}/></section>;
+}
+function SetupSteps({ currentStep }) {
+    const { dict } = useI18n();
+    const steps = [
+        ['setup_profile_step', 'setup_profile_step_hint'],
+        ['setup_camera_step', 'setup_camera_step_hint'],
+        ['setup_play_step', 'setup_play_step_hint'],
+    ];
+    return <ol className="setup-steps" aria-label={localText(dict, 'setup_steps_heading')}>
+      {steps.map(([titleKey, hintKey], index) => {
+        const state = index < currentStep ? 'complete' : index === currentStep ? 'current' : 'upcoming';
+        return <li className={`setup-step ${state}`} key={titleKey} aria-current={state === 'current' ? 'step' : undefined}>
+          <span className="setup-step-marker">{state === 'complete' ? '✓' : index + 1}</span>
+          <span className="setup-step-copy"><strong>{localText(dict, titleKey)}</strong><small>{localText(dict, hintKey)}</small></span>
+        </li>;
+      })}
+    </ol>;
 }
 function HomeScreen({ profile, clinic, patients, onPlay, onSettings, onPrint }) {
     const { dict, language } = useI18n();
