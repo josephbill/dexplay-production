@@ -648,35 +648,58 @@ function ReviewCandidateCard({ item, disabled, onReview }) {
     });
     const change = (key, value) => setForm(current => ({ ...current, [key]: value }));
     return <article className="panel review-candidate">
-      <p className="notice">{localText(dict, 'review_candidate_unapproved')}</p>
-      <h3>{item.title}</h3>
-      <p>{localText(dict, 'review_source_publisher', { source: item.source })}</p>
-      <a className="review-resource-link" href={item.url} target="_blank" rel="noopener noreferrer">
-        <span>{localText(dict, 'review_open_candidate')}</span><span aria-hidden="true">↗</span><small>{item.url}</small>
-      </a>
-      <p>{localText(dict, 'review_discovered_link_check', {
-        discovered: new Date(item.discovered_at).toLocaleString(languageLocale(language)),
-        checked: item.verified_at ? new Date(item.verified_at).toLocaleString(languageLocale(language)) : localText(dict, 'review_not_checked'),
-        status: item.link_status,
-      })}</p>
-      <label>{localText(dict, 'review_access_status')}<select value={form.access_status} onChange={event => change('access_status', event.target.value)}>
-        <option value="unknown">{localText(dict, 'review_access_unknown')}</option>
-        <option value="free_public">{localText(dict, 'review_access_free')}</option>
-        <option value="account_required">{localText(dict, 'review_access_account')}</option>
-        <option value="paid">{localText(dict, 'review_access_paid')}</option>
-      </select></label>
-      <label>{localText(dict, 'review_license')}<input value={form.license_info} onChange={event => change('license_info', event.target.value)}/></label>
-      <label>{localText(dict, 'review_intended_age')}<input value={form.age_range} onChange={event => change('age_range', event.target.value)} placeholder={localText(dict, 'review_age_placeholder')}/></label>
-      <label>{localText(dict, 'review_activity_relevance')}<textarea value={form.mat_relevance} onChange={event => change('mat_relevance', event.target.value)}/></label>
-      <label>{localText(dict, 'review_safety')}<textarea value={form.safety_notes} onChange={event => change('safety_notes', event.target.value)}/></label>
-      {item.link_status !== 'HTTP 200' && <label className="consent-check"><input type="checkbox" checked={form.link_verified} onChange={event => change('link_verified', event.target.checked)}/>{localText(dict, 'review_manual_link_check')}</label>}
-      <label>{localText(dict, 'review_reviewer_notes')}<textarea value={form.review_notes} onChange={event => change('review_notes', event.target.value)}/></label>
-      <label className="consent-check"><input type="checkbox" checked={form.clinic_approved} onChange={event => change('clinic_approved', event.target.checked)}/>{localText(dict, 'review_clinic_approval')}</label>
-      {form.clinic_approved && <label>{localText(dict, 'review_clinic_evidence')}<textarea value={form.clinic_approval_evidence} onChange={event => change('clinic_approval_evidence', event.target.value)} placeholder={localText(dict, 'review_clinic_evidence_placeholder')}/></label>}
-      <p className="muted">{localText(dict, 'review_publish_requirements')}</p>
-      <div className="form-actions">
-        <button className="button secondary" disabled={disabled} onClick={() => onReview(item.id, 'reject')}>{localText(dict, 'review_reject')}</button>
-        <button className="button primary" disabled={disabled || form.access_status !== 'free_public' || !form.age_range.trim() || !form.mat_relevance.trim() || !form.safety_notes.trim() || !form.license_info.trim() || (item.link_status !== 'HTTP 200' && !form.review_notes.trim()) || (form.clinic_approved && !form.clinic_approval_evidence.trim())} onClick={() => onReview(item.id, 'approve', form)}>{localText(dict, 'review_approve_publish')}</button>
+      <header className="review-candidate-header">
+        <div className="review-candidate-title">
+          <span className="review-candidate-status">{localText(dict, 'review_candidate_unapproved')}</span>
+          <h3>{item.title}</h3>
+          <p>{localText(dict, 'review_source_publisher', { source: item.source })}</p>
+        </div>
+        <a className="review-resource-link" href={item.url} target="_blank" rel="noopener noreferrer">
+          <span>{localText(dict, 'review_open_candidate')}</span><span aria-hidden="true">↗</span><small>{item.url}</small>
+        </a>
+      </header>
+      <div className="review-candidate-meta">
+        <span className="review-meta-label">{localText(dict, 'review_link_check_label')}</span>
+        <span>{item.link_status || localText(dict, 'review_not_checked')}</span>
+        <span>{localText(dict, 'review_discovered_link_check', {
+          discovered: new Date(item.discovered_at).toLocaleString(languageLocale(language)),
+          checked: item.verified_at ? new Date(item.verified_at).toLocaleString(languageLocale(language)) : localText(dict, 'review_not_checked'),
+          status: item.link_status,
+        })}</span>
+      </div>
+      <div className="review-form">
+        <fieldset className="review-form-section">
+          <legend>{localText(dict, 'review_access_license_title')}</legend>
+          <div className="review-form-grid">
+            <label>{localText(dict, 'review_access_status')}<select value={form.access_status} onChange={event => change('access_status', event.target.value)}>
+              <option value="unknown">{localText(dict, 'review_access_unknown')}</option>
+              <option value="free_public">{localText(dict, 'review_access_free')}</option>
+              <option value="account_required">{localText(dict, 'review_access_account')}</option>
+              <option value="paid">{localText(dict, 'review_access_paid')}</option>
+            </select></label>
+            <label>{localText(dict, 'review_license')}<input value={form.license_info} onChange={event => change('license_info', event.target.value)}/></label>
+            <label>{localText(dict, 'review_intended_age')}<input value={form.age_range} onChange={event => change('age_range', event.target.value)} placeholder={localText(dict, 'review_age_placeholder')}/></label>
+          </div>
+        </fieldset>
+        <fieldset className="review-form-section">
+          <legend>{localText(dict, 'review_relevance_safety_title')}</legend>
+          <div className="review-form-grid">
+            <label>{localText(dict, 'review_activity_relevance')}<textarea value={form.mat_relevance} onChange={event => change('mat_relevance', event.target.value)}/></label>
+            <label>{localText(dict, 'review_safety')}<textarea value={form.safety_notes} onChange={event => change('safety_notes', event.target.value)}/></label>
+            {item.link_status !== 'HTTP 200' && <label className="review-check-card"><input type="checkbox" checked={form.link_verified} onChange={event => change('link_verified', event.target.checked)}/><span>{localText(dict, 'review_manual_link_check')}</span></label>}
+            <label className="review-notes-field">{localText(dict, 'review_reviewer_notes')}<textarea value={form.review_notes} onChange={event => change('review_notes', event.target.value)}/></label>
+          </div>
+        </fieldset>
+        <fieldset className="review-form-section review-approval-section">
+          <legend>{localText(dict, 'review_decision_title')}</legend>
+          <label className="review-check-card"><input type="checkbox" checked={form.clinic_approved} onChange={event => change('clinic_approved', event.target.checked)}/><span>{localText(dict, 'review_clinic_approval')}</span></label>
+          {form.clinic_approved && <label>{localText(dict, 'review_clinic_evidence')}<textarea value={form.clinic_approval_evidence} onChange={event => change('clinic_approval_evidence', event.target.value)} placeholder={localText(dict, 'review_clinic_evidence_placeholder')}/></label>}
+          <p className="review-publish-note">{localText(dict, 'review_publish_requirements')}</p>
+          <div className="form-actions">
+            <button className="button secondary" disabled={disabled} onClick={() => onReview(item.id, 'reject')}>{localText(dict, 'review_reject')}</button>
+            <button className="button primary" disabled={disabled || form.access_status !== 'free_public' || !form.age_range.trim() || !form.mat_relevance.trim() || !form.safety_notes.trim() || !form.license_info.trim() || (item.link_status !== 'HTTP 200' && !form.review_notes.trim()) || (form.clinic_approved && !form.clinic_approval_evidence.trim())} onClick={() => onReview(item.id, 'approve', form)}>{localText(dict, 'review_approve_publish')}</button>
+          </div>
+        </fieldset>
       </div>
     </article>;
 }

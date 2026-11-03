@@ -2,6 +2,10 @@ import type { Dictionary, Language } from '../i18n';
 
 export const reportTranslations: Partial<Record<Language, Dictionary>> = {
   en: {
+    review_access_license_title: 'Access, license & age',
+    review_decision_title: 'Approval decision',
+    review_link_check_label: 'Link verification',
+    review_relevance_safety_title: 'Relevance & safety review',
     review_allowed_sources_title: 'Approved discovery feed',
     review_load_action_description: 'Check the protected queue for resources already discovered and review the published catalog.',
     review_discover_action_description: 'Search the approved public feed for new candidates. Newly found items stay private until reviewed.',
@@ -9,6 +13,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     review_open_candidate: 'Open candidate resource',
   },
   es: {
+    review_access_license_title: 'Acceso, licencia y edad',
+    review_decision_title: 'Decisión de aprobación',
+    review_link_check_label: 'Verificación del enlace',
+    review_relevance_safety_title: 'Revisión de pertinencia y seguridad',
     review_allowed_sources_title: 'Fuente de búsqueda aprobada',
     review_load_action_description: 'Consulta la cola protegida para revisar los recursos encontrados y el catálogo publicado.',
     review_discover_action_description: 'Busca candidatos nuevos en la fuente pública aprobada. Los elementos encontrados no se publicarán hasta que se revisen.',
@@ -87,6 +95,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'Se rechazó la propuesta. No se cambiaron los ajustes guardados.',
   },
   fr: {
+    review_access_license_title: 'Accès, licence et âge',
+    review_decision_title: 'Décision d’approbation',
+    review_link_check_label: 'Vérification du lien',
+    review_relevance_safety_title: 'Pertinence et sécurité',
     review_allowed_sources_title: 'Flux de découverte approuvé',
     review_load_action_description: 'Consultez la file protégée pour examiner les ressources repérées et le catalogue publié.',
     review_discover_action_description: 'Recherchez de nouvelles ressources dans le flux public approuvé. Les résultats restent privés jusqu’à leur examen.',
@@ -165,6 +177,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'Suggestion refusée. Les réglages enregistrés restent inchangés.',
   },
   pt: {
+    review_access_license_title: 'Acesso, licença e idade',
+    review_decision_title: 'Decisão de aprovação',
+    review_link_check_label: 'Verificação do link',
+    review_relevance_safety_title: 'Relevância e segurança',
     review_allowed_sources_title: 'Fonte de descoberta aprovada',
     review_load_action_description: 'Consulte a fila protegida para revisar recursos encontrados e o catálogo publicado.',
     review_discover_action_description: 'Busque novos candidatos na fonte pública aprovada. Os itens encontrados permanecem privados até serem analisados.',
@@ -243,6 +259,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'Sugestão recusada. As configurações salvas não foram alteradas.',
   },
   sw: {
+    review_access_license_title: 'Ufikiaji, leseni na umri',
+    review_decision_title: 'Uamuzi wa kuidhinisha',
+    review_link_check_label: 'Uthibitishaji wa kiungo',
+    review_relevance_safety_title: 'Ukaguzi wa umuhimu na usalama',
     review_allowed_sources_title: 'Chanzo kilichoidhinishwa cha kutafuta',
     review_load_action_description: 'Angalia foleni iliyolindwa ili kukagua rasilimali zilizopatikana na katalogi iliyochapishwa.',
     review_discover_action_description: 'Tafuta rasilimali mpya kwenye chanzo cha umma kilichoidhinishwa. Zitaendelea kuwa za faragha hadi zikaguliwe.',
@@ -321,6 +341,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'Pendekezo limekataliwa. Mipangilio iliyohifadhiwa haijabadilishwa.',
   },
   tl: {
+    review_access_license_title: 'Access, lisensya at edad',
+    review_decision_title: 'Desisyon sa pag-apruba',
+    review_link_check_label: 'Pag-verify ng link',
+    review_relevance_safety_title: 'Pagsusuri ng kaugnayan at kaligtasan',
     review_allowed_sources_title: 'Aprubadong discovery feed',
     review_load_action_description: 'Tingnan ang protected queue para suriin ang mga natuklasang resource at ang published catalog.',
     review_discover_action_description: 'Maghanap ng bagong kandidato sa aprubadong public feed. Mananatiling pribado ang mga resulta hanggang masuri.',
@@ -399,6 +423,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'Tinanggihan ang mungkahi. Hindi binago ang mga naka-save na setting.',
   },
   zh: {
+    review_access_license_title: '访问方式、许可与适用年龄',
+    review_decision_title: '审核决定',
+    review_link_check_label: '链接验证',
+    review_relevance_safety_title: '相关性与安全性审核',
     review_allowed_sources_title: '已批准的发现信息源',
     review_load_action_description: '查看受保护的队列，审核已发现的资源和已发布的目录。',
     review_discover_action_description: '从已批准的公开信息源查找新候选资源。审核通过前，新项目不会公开。',
@@ -477,6 +505,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: '已拒绝难度建议。已保存的游戏设置未更改。',
   },
   ar: {
+    review_access_license_title: 'الوصول والترخيص والعمر',
+    review_decision_title: 'قرار الموافقة',
+    review_link_check_label: 'التحقق من الرابط',
+    review_relevance_safety_title: 'مراجعة الملاءمة والسلامة',
     review_allowed_sources_title: 'مصدر الاكتشاف المعتمد',
     review_load_action_description: 'اعرض قائمة المراجعة المحمية للتحقق من الموارد المكتشفة والكتالوج المنشور.',
     review_discover_action_description: 'ابحث عن موارد مرشحة جديدة في المصدر العام المعتمد. تبقى العناصر المكتشفة خاصة حتى مراجعتها.',
@@ -555,6 +587,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'رُفض الاقتراح. لم تتغير إعدادات اللعبة المحفوظة.',
   },
   hi: {
+    review_access_license_title: 'पहुँच, लाइसेंस और आयु',
+    review_decision_title: 'अनुमोदन का निर्णय',
+    review_link_check_label: 'लिंक सत्यापन',
+    review_relevance_safety_title: 'प्रासंगिकता और सुरक्षा समीक्षा',
     review_allowed_sources_title: 'स्वीकृत खोज फ़ीड',
     review_load_action_description: 'खोजे गए संसाधनों और प्रकाशित कैटलॉग की समीक्षा के लिए सुरक्षित कतार देखें।',
     review_discover_action_description: 'स्वीकृत सार्वजनिक फ़ीड में नए उम्मीदवार खोजें। समीक्षा होने तक नई सामग्री निजी रहेगी।',
@@ -633,6 +669,10 @@ export const reportTranslations: Partial<Record<Language, Dictionary>> = {
     difficulty_declined_notice: 'कठिनाई का सुझाव अस्वीकार किया गया। सहेजी गई सेटिंग नहीं बदली।',
   },
   bn: {
+    review_access_license_title: 'অ্যাক্সেস, লাইসেন্স ও বয়স',
+    review_decision_title: 'অনুমোদনের সিদ্ধান্ত',
+    review_link_check_label: 'লিংক যাচাই',
+    review_relevance_safety_title: 'প্রাসঙ্গিকতা ও নিরাপত্তা পর্যালোচনা',
     review_allowed_sources_title: 'অনুমোদিত অনুসন্ধান ফিড',
     review_load_action_description: 'খুঁজে পাওয়া রিসোর্স ও প্রকাশিত ক্যাটালগ পর্যালোচনা করতে সুরক্ষিত কিউ দেখুন।',
     review_discover_action_description: 'অনুমোদিত পাবলিক ফিডে নতুন প্রার্থী খুঁজুন। পর্যালোচনা না হওয়া পর্যন্ত সেগুলো ব্যক্তিগত থাকবে।',
